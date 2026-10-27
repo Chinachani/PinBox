@@ -98,7 +98,7 @@
         <!-- 搜索栏 -->
         <div class="search-box" id="search-box-container">
           <svg style="width: 15px; height: 15px; color: var(--muted-light); flex-shrink: 0;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-          <input type="text" id="search-input" placeholder="全局检索：型号 (74HC595) / C编号 (C393938) / 封装 (0805) / 库位..." autocomplete="off">
+          <input type="text" id="search-input" placeholder="全局检索 / 找料：'10k 0603 电阻'、'470uF 50V'、'ESP32'、C编号..." autocomplete="off">
           <span class="desktop-kbd-hint">/</span>
           <button class="clear-search-btn" id="btn-clear-search">✕</button>
         </div>
@@ -408,6 +408,7 @@
             <div class="panel-title">数据备份与恢复</div>
             <div class="panel-desc">定期下载全量备份（含物料 / 流水 / 库位）；恢复会覆盖当前全部数据，请谨慎操作。</div>
             <div class="backup-grid">
+              <a href="/api/export/excel" class="btn-action btn-secondary" id="a-export-excel">📊 Excel 报表</a>
               <a href="/api/export?format=csv" class="btn-action btn-secondary" download id="a-export-csv">导出 CSV 表格</a>
               <a href="/api/backup" class="btn-action btn-secondary" download id="a-export-json">下载全量备份</a>
               <input type="file" id="restore-file-input" accept=".json" style="display: none;">
@@ -730,6 +731,10 @@ C25703 5 ..."></textarea>
           <button class="btn-action btn-secondary btn-sm" id="btn-detail-print">
             <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
             <span>打印标签</span>
+          </button>
+          <button class="btn-action btn-secondary btn-sm" id="btn-lcsc-price" title="查询立创商城当前售价">
+            <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>立创比价</span>
           </button>
           <a class="btn-action btn-secondary btn-sm" id="detail-lcsc-link" href="#" target="_blank" rel="noopener" title="在立创商城查看实时价格与数据手册">
             <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>

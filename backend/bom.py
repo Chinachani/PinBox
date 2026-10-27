@@ -261,6 +261,78 @@ def _norm(s: str) -> str:
 def _tokenize(s: str) -> List[str]:
     return [t for t in re.split(r'[^0-9A-Za-z\u4e00-\u9fff]+', str(s or '').upper()) if len(t) >= 2]
 
+def find_materials(query: str, limit: int = 12) -> Dict[str, Any]:
+    """
+    找料模式：自然描述反查库存。
+    例："10k 0603 电阻" / "470uF 50V 电解" / "ESP32" / "SS34" / "100nF"
+    返回规格解读 + 按相关度排序的库存候选。
+    """
+    import os
+    import sqlite3
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "inventory.db")
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    inv = [dict(r) for r in conn.execute(
+        "SELECT code, model, brand, category, package, quantity, price, location FROM materials").fetchall()]
+    conn.close()
+
+    spec = decode_spec(query)
+    q_norm = _norm(query)
+    q_tokens = set(_tokenize(query))
+
+    # 类别判定（描述里有明确类别词则强过滤）
+    cat_hints = []
+    for word in ("电阻", "电容", "电感", "晶振", "MOS", "二极管", "三极管", "稳压", "传感器",
+                 "连接器", "排针", "排母", "按键", "开关", "LED", "屏幕", "模块", "芯片", "保险", "天线"):
+        if word in query:
+            cat_hints.append(word)
+
+    pkg = spec["package"]
+    scored = []
+    for m in inv:
+        hay = f'{m["model"]} {m["package"] or ""} {m["brand"] or ""} {m["category"] or ""}'.upper()
+        hay_norm = _norm(hay)
+        score = 0.0
+
+        # 1. C编号直击
+        if q_norm and q_norm == _norm(m["code"]):
+            score = 1.0
+        # 2. 型号归一化命中
+        elif q_norm and (q_norm in hay_norm or hay_norm in q_norm) and min(len(q_norm), len(hay_norm)) >= 4:
+            score = 0.85
+
+        # 3. 规格解码：值 + 封装 + 类别
+        values = spec["res_values"] + spec["cap_values"] + spec["ind_values"]
+        val_hits = sum(1 for v in values if v.upper() in hay)
+        if val_hits:
+            score = max(score, 0.6 + 0.08 * min(val_hits, 2))
+        if pkg and pkg in hay:
+            score += 0.12
+        if cat_hints:
+            if any(c in (m["category"] or "") or c in (m["model"] or "") for c in cat_hints):
+                score += 0.15
+            else:
+                score -= 0.2   # 描述明确指定类别但物料不符 → 降权
+
+        # 4. token 覆盖
+        if q_tokens:
+            mt = set(_tokenize(hay))
+            inter = q_tokens & mt
+            strong = [t for t in inter if len(t) >= 3]
+            if strong:
+                score = max(score, 0.35 + 0.25 * (len(strong) / len(q_tokens)))
+
+        if score >= 0.35:
+            scored.append({"score": round(min(score, 1.0), 2), **m})
+
+    scored.sort(key=lambda x: -x["score"])
+    return {
+        "query": query,
+        "spec": spec,
+        "results": scored[:limit],
+        "total": len(scored)
+    }
+
 def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     逐行匹配库存。分层：

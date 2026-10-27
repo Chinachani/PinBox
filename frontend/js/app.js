@@ -146,6 +146,49 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// ---------- WebSocket 实时同步 ----------
+let wsConn = null;
+let wsReconnectTimer = null;
+let wsRefreshTimer = null;
+
+function initLiveSync() {
+  if (DataLayer.mode === 'local') return;   // 离线模式不需要
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const base = DataLayer.mode === 'server' && DataLayer.serverUrl
+      ? DataLayer.serverUrl.replace(/^http/, 'ws')
+      : `${proto}://${location.host}`;
+    wsConn = new WebSocket(`${base}/ws`);
+
+    wsConn.onopen = () => {
+      const dot = document.querySelector('#header-stat .dot');
+      if (dot) dot.style.background = 'var(--accent)';
+    };
+    wsConn.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      // 500ms 防抖合并多次变更；当前正在输入/弹窗打开时不打扰
+      clearTimeout(wsRefreshTimer);
+      wsRefreshTimer = setTimeout(() => {
+        loadStats();
+        if (!$('#search-box-container') || $('#search-box-container').style.display === 'none') return;
+        loadMaterials();
+        loadCategories();
+      }, 500);
+      const code = msg.code || '';
+      const action = { stock: '库存变动', create: '新料建档', update: '档案更新', delete: '物料删除', batch_location: '批量归位' }[msg.type] || '数据更新';
+      showToast(`🔄 ${action}${code ? ' ' + code : ''}（已同步）`, 'info', 1800);
+    };
+    wsConn.onclose = () => {
+      const dot = document.querySelector('#header-stat .dot');
+      if (dot) dot.style.background = 'var(--warning)';
+      // 断线 5s 重连
+      clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = setTimeout(initLiveSync, 5000);
+    };
+  } catch (e) { /* 浏览器不支持则忽略 */ }
+}
+
 // ---------- 初始化 ----------
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
@@ -164,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadCategories();
   loadLocations(true);
   loadMaterials();
+  initLiveSync();
 });
 
 // ---------- 1. 导航 ----------
@@ -434,6 +478,13 @@ async function loadMaterials() {
 
     if (items.length === 0) {
       listEl.innerHTML = '';
+      emptyEl.style.display = 'none';
+      // 找料模式：本地检索无结果 → 规格引擎反查
+      if (state.searchQuery && !state.locationFilter && !state.quickFilter && !state.activeCategory) {
+        await renderFindResults(state.searchQuery);
+        if (paginationEl) paginationEl.style.display = 'none';
+        return;
+      }
       emptyEl.style.display = 'flex';
       if (paginationEl) paginationEl.style.display = 'none';
       return;
@@ -445,6 +496,40 @@ async function loadMaterials() {
     renderLocFilterChip();
   } catch (e) {
     console.error('Failed to load materials', e);
+  }
+}
+
+// ---------- 找料模式渲染 ----------
+async function renderFindResults(query) {
+  const listEl = $('material-list');
+  const emptyEl = $('stock-empty');
+  try {
+    const res = await api(`/api/find?q=${encodeURIComponent(query)}`);
+    if (!res.ok) { emptyEl.style.display = 'flex'; return; }
+    const data = await res.json();
+    if (!data.results || !data.results.length) {
+      emptyEl.style.display = 'flex';
+      return;
+    }
+    // 顶部说明条：解析出的规格原子
+    const spec = data.spec || {};
+    const specBits = [
+      spec.package && `封装 ${spec.package}`,
+      spec.res_values.length && `阻值 ${spec.res_values.slice(0, 2).join('/')}`,
+      spec.cap_values.length && `容值 ${spec.cap_values.slice(0, 2).join('/')}`,
+      spec.ind_values.length && `感量 ${spec.ind_values[0]}`,
+    ].filter(Boolean).join(' · ');
+
+    const banner = `
+      <div style="grid-column: 1 / -1; background: var(--primary-light); border: 1px solid var(--primary); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12px; color: var(--primary); margin-bottom: 2px;">
+        🔍 找料引擎：本地无精确匹配，为你解读规格${specBits ? `（${specBits}）` : ''}并匹配库存 ${data.results.length} 款
+      </div>`;
+
+    listEl.innerHTML = banner + data.results.map(m => renderMaterialCard(m)).join('');
+    bindMaterialCardEvents();
+    showToast(`找到 ${data.results.length} 款相似库存`, 'info');
+  } catch (e) {
+    emptyEl.style.display = 'flex';
   }
 }
 
@@ -1317,6 +1402,24 @@ function initModals() {
   });
   $('btn-detail-print').addEventListener('click', () => {
     if (state.currentDetail) printMaterialLabel(state.currentDetail);
+  });
+
+  $('btn-lcsc-price').addEventListener('click', async () => {
+    if (!state.currentDetail) return;
+    const code = state.currentDetail.code;
+    const local = state.currentDetail.price > 0 ? `你的记录价 ￥${state.currentDetail.price}` : '未记录采购价';
+    try {
+      const res = await api(`/api/lcsc/price/${code}`);
+      const data = await res.json();
+      if (data.ok && data.url) {
+        window.open(data.url, '_blank', 'noopener');
+        showToast(`${local} · 已打开立创页面查看实时价`, 'info', 3000);
+      } else {
+        showToast(data.message || '请用「立创页面」按钮查看', 'error', 3000);
+      }
+    } catch (e) {
+      showToast('请求失败', 'error');
+    }
   });
 
   $('btn-apply-stock-delta').addEventListener('click', async () => {
@@ -2344,7 +2447,14 @@ async function updatePendingCount() {
 }
 
 function bindLocalExports() {
+  const excelLink = $('a-export-excel');
   const csvLink = $('a-export-csv');
+  if (DataLayer.mode !== 'local' && excelLink) {
+    excelLink.addEventListener('click', (e) => {
+      // 保持 <a> 默认下载，仅提示
+      showToast('正在生成 Excel 报表…', 'info', 1600);
+    });
+  }
   const jsonLink = $('a-export-json');
   if (DataLayer.mode !== 'local') return;
   if (csvLink) csvLink.addEventListener('click', async (e) => {

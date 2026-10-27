@@ -9,7 +9,7 @@ import shutil
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Response, Request
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Response, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,6 +21,57 @@ from parser import parse_lcsc_barcode, parse_import_records
 import bom as bom_engine
 
 app = FastAPI(title="LCSC Mini WMS", description="嘉立创元器件掌上出入库与库存管理系统")
+
+
+# --- WebSocket 实时同步 ---
+class ConnectionHub:
+    """所有已连接客户端广播池"""
+    def __init__(self):
+        self.clients: set = set()
+        self.lock = threading.Lock()
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        with self.lock:
+            self.clients.add(ws)
+
+    def disconnect(self, ws: WebSocket):
+        with self.lock:
+            self.clients.discard(ws)
+
+    async def broadcast(self, message: dict):
+        dead = []
+        with self.lock:
+            targets = list(self.clients)
+        for ws in targets:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+
+hub = ConnectionHub()
+
+
+async def notify_change(kind: str, code: str = "", extra: dict = None):
+    """库存/物料变更后广播给所有在线客户端"""
+    await hub.broadcast({
+        "type": kind, "code": code, "ts": now_local(),
+        **(extra or {})
+    })
+
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
+    await hub.connect(ws)
+    try:
+        while True:
+            # 客户端只保活，不处理业务消息
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        hub.disconnect(ws)
 
 # 允许跨域（方便局域网内任意客户端调用）
 app.add_middleware(
@@ -215,7 +266,7 @@ def get_material(code: str):
     return material
 
 @app.post("/api/materials")
-def create_material(data: MaterialCreate):
+async def create_material(data: MaterialCreate):
     conn = get_db_connection()
     c = conn.cursor()
     code = data.code.strip().upper()
@@ -252,10 +303,11 @@ def create_material(data: MaterialCreate):
 
     conn.commit()
     conn.close()
+    await notify_change("create", code)
     return {"message": "创建成功", "code": code}
 
 @app.put("/api/materials/{code}")
-def update_material(code: str, data: MaterialUpdate):
+async def update_material(code: str, data: MaterialUpdate):
     conn = get_db_connection()
     c = conn.cursor()
     code = code.strip().upper()
@@ -294,10 +346,11 @@ def update_material(code: str, data: MaterialUpdate):
     c.execute(f"UPDATE materials SET {set_clause} WHERE code = ?", values)
     conn.commit()
     conn.close()
+    await notify_change("update", code, {"fields": list(update_dict.keys())})
     return {"message": "更新成功"}
 
 @app.delete("/api/materials/{code}")
-def delete_material(code: str):
+async def delete_material(code: str):
     conn = get_db_connection()
     c = conn.cursor()
     code = code.strip().upper()
@@ -311,10 +364,11 @@ def delete_material(code: str):
     c.execute("DELETE FROM materials WHERE code = ?", (code,))
     conn.commit()
     conn.close()
+    await notify_change("delete", code)
     return {"message": f"已删除物料 {code}"}
 
 @app.post("/api/materials/{code}/stock")
-def change_stock(code: str, change: StockChange):
+async def change_stock(code: str, change: StockChange):
     conn = get_db_connection()
     c = conn.cursor()
     code = code.strip().upper()
@@ -352,6 +406,7 @@ def change_stock(code: str, change: StockChange):
 
     conn.commit()
     conn.close()
+    await notify_change("stock", code, {"delta": delta, "current": new_q, "project": project})
     return {"message": "库存变动成功", "code": code, "previous": current_q, "delta": delta, "current": new_q}
 
 @app.post("/api/scan-image")
@@ -570,7 +625,7 @@ def delete_location(loc_id: int, force: bool = False):
     return {"message": f"库位 {row['name']} 已删除", "cleared_materials": used}
 
 @app.post("/api/batch-location")
-def batch_assign_location(data: BatchLocation):
+async def batch_assign_location(data: BatchLocation):
     conn = get_db_connection()
     c = conn.cursor()
     loc = (data.location or "").strip()
@@ -597,6 +652,7 @@ def batch_assign_location(data: BatchLocation):
 
     conn.commit()
     conn.close()
+    await notify_change("batch_location", "", {"count": updated, "location": loc})
     return {"message": f"已将 {updated} 款物料归位到「{loc or '未分配'}」", "updated": updated}
 
 # --- 导入 / 导出 / 备份 ---
@@ -1051,6 +1107,119 @@ def backup_now():
     name = _run_backup()
     return {"message": f"备份完成: {name}", "name": name}
 
+
+# --- 找料模式 ---
+
+@app.get("/api/find")
+def find_materials_api(q: str = Query(..., min_length=1, max_length=80)):
+    """自然描述反查库存：'10k 0603 电阻' / '470uF 50V 电解' / 'ESP32'"""
+    return bom_engine.find_materials(q.strip())
+
+
+# --- Excel 美化报表 ---
+
+@app.get("/api/export/excel")
+def export_excel():
+    """正式库存报表：美化表头/列宽/小计，适合打印与存档"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务器缺少 openpyxl")
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    rows = [dict(r) for r in c.execute(
+        "SELECT * FROM materials ORDER BY category, code").fetchall()]
+    stats = {
+        "sku": c.execute("SELECT COUNT(*) FROM materials").fetchone()[0],
+        "pieces": c.execute("SELECT COALESCE(SUM(quantity),0) FROM materials").fetchone()[0],
+        "value": c.execute("SELECT COALESCE(SUM(quantity*price),0) FROM materials").fetchone()[0],
+    }
+    conn.close()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "库存总表"
+
+    # 标题行
+    ws.merge_cells("A1:M1")
+    t = ws["A1"]
+    t.value = f"PinBox 引脚仓 · 库存总表（导出于 {now_local()}）"
+    t.font = Font(size=14, bold=True, color="FFFFFF")
+    t.fill = PatternFill("solid", fgColor="1F2328")
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+
+    headers = ["C编号", "分类", "品牌", "型号/名称", "封装", "数量", "单位",
+               "单价(元)", "小计(元)", "库位", "预警线", "用途", "批次"]
+    keys = ["code", "category", "brand", "model", "package", "quantity", "unit",
+            "price", None, "location", "min_stock", "use_case", "batch"]
+    thin = Side(style="thin", color="D0D7DE")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col, value=h)
+        cell.font = Font(bold=True, size=10, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="0969DA")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    for i, m in enumerate(rows):
+        r = i + 3
+        for col, k in enumerate(keys, 1):
+            if k is None:
+                v = round((m.get("quantity") or 0) * (m.get("price") or 0), 4)
+            else:
+                v = m.get(k, "")
+            cell = ws.cell(row=r, column=col, value=v)
+            cell.border = border
+            cell.font = Font(size=10)
+            if k in ("quantity", "price") or k is None:
+                cell.alignment = Alignment(horizontal="right")
+        # 数量为 0 标红
+        if (m.get("quantity") or 0) == 0:
+            ws.cell(row=r, column=6).font = Font(size=10, bold=True, color="CF222E")
+
+    # 汇总行
+    last = len(rows) + 3
+    ws.merge_cells(start_row=last, start_column=1, end_row=last, end_column=5)
+    s = ws.cell(row=last, column=1,
+                value=f"合计：{stats['sku']} 款 / {stats['pieces']} 件 / 资产估值 ￥{stats['value']:.2f}")
+    s.font = Font(bold=True, size=11)
+    s.fill = PatternFill("solid", fgColor="FFF8C5")
+
+    widths = [12, 16, 14, 36, 12, 8, 6, 10, 10, 12, 8, 32, 18]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A3"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=pinbox_inventory_{datetime.now().strftime('%Y%m%d')}.xlsx"}
+    )
+
+
+# --- 立创比价 ---
+# 说明：立创商城有 JS 反爬盾（服务端纯 HTTP 拿不到价格），故此端点返回
+# 深度链接由前端直接打开（用户浏览器内有正常 cookie，可看实价）。
+
+@app.get("/api/lcsc/price/{code}")
+def lcsc_price(code: str):
+    import re as _re
+    code = code.strip().upper()
+    if not _re.fullmatch(r"C\d{4,9}", code):
+        raise HTTPException(status_code=400, detail="编号格式不正确")
+    return {
+        "ok": True,
+        "code": code,
+        "url": f"https://so.szlcsc.com/global.html?k={code}",
+        "message": "请在打开的立创页面查看实时价格"
+    }
 
 # 挂载前端静态资源
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
