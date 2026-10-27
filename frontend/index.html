@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>PinBox 引脚仓 - 智能元器件库位与BOM管理系统</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#0969da" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="PinBox">
+  <link rel="stylesheet" href="/css/style.css?v=202610271500">
+  <script src="/js/html5-qrcode.min.js?v=202610271500"></script>
+  <script src="/js/qrcode.min.js?v=202610271500"></script>
+  <script src="/js/local-db.js?v=202610271500"></script>
+  <script src="/js/local-api.js?v=202610271500"></script>
+  <script src="/js/api.js?v=202610271500"></script>
+</head>
+<body>
+
+  <div class="app-layout">
+    <!-- ==========================================
+         电脑端专属左侧导航栏 (Desktop Sidebar)
+         ========================================== -->
+    <aside class="desktop-sidebar">
+      <div>
+        <div class="sidebar-header">
+          <div class="sidebar-badge">PB</div>
+          <div>
+            <div class="sidebar-brand-name">PinBox 引脚仓</div>
+            <div class="sidebar-brand-sub">HARDWARE LAB V3.0</div>
+          </div>
+        </div>
+
+        <nav class="sidebar-menu">
+          <div class="sidebar-item active" data-view="view-stock">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            <span>库存全景</span>
+          </div>
+          <div class="sidebar-item" data-view="view-scan">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7V5a2 2 0 012-2h2m10 0h2a2 2 0 012 2v2m0 10v2a2 2 0 01-2 2h-2M5 21H3a2 2 0 01-2-2v-2M7 12h10"/></svg>
+            <span>扫码出入库</span>
+          </div>
+          <div class="sidebar-item" data-view="view-location">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+            <span>收纳盒库位</span>
+          </div>
+          <div class="sidebar-item" data-view="view-tools">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <span>管理与看板</span>
+          </div>
+          <div class="sidebar-item" data-view="view-bom">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+            <span>BOM 核对</span>
+          </div>
+        </nav>
+      </div>
+
+      <div class="sidebar-footer-card">
+        <div class="sidebar-footer-stat-title">
+          <span>总库存资产</span>
+          <span style="display: flex; align-items: center; gap: 4px; font-weight: 600;" id="sidebar-net-state">在线</span>
+        </div>
+        <div class="sidebar-footer-stat-val"><span id="sidebar-stat-val">--</span></div>
+        <div class="sidebar-footer-asset" id="sidebar-stat-asset">￥--</div>
+        <div style="font-size: 11px; color: var(--muted); margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 6px;">
+          支持 USB/蓝牙扫码枪全局扫码
+        </div>
+      </div>
+    </aside>
+
+    <!-- ==========================================
+         右侧主视区 (Main Content)
+         ========================================== -->
+    <div class="main-content">
+      <!-- 顶部固定栏 -->
+      <header class="app-header">
+        <div class="header-top">
+          <div class="brand-title">
+            <span class="sidebar-badge" style="width: 24px; height: 24px; font-size: 10px;">PB</span>
+            <span>PinBox 引脚仓</span>
+          </div>
+          <div class="header-actions">
+            <div class="quick-stats" id="header-stat">
+              <span class="dot"></span>
+              <span id="header-stat-text">加载中…</span>
+            </div>
+            <button class="icon-btn" id="btn-theme-toggle" title="切换深浅色主题" aria-label="切换主题">
+              <svg class="icon-sun" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+              <svg class="icon-moon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 搜索栏 -->
+        <div class="search-box" id="search-box-container">
+          <svg style="width: 15px; height: 15px; color: var(--muted-light); flex-shrink: 0;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          <input type="text" id="search-input" placeholder="全局检索：型号 (74HC595) / C编号 (C393938) / 封装 (0805) / 库位..." autocomplete="off">
+          <span class="desktop-kbd-hint">/</span>
+          <button class="clear-search-btn" id="btn-clear-search">✕</button>
+        </div>
+
+        <!-- 分类滑块 -->
+        <div class="category-scroll" id="cat-chips">
+          <div class="cat-chip active" data-cat="">全部品类</div>
+        </div>
+      </header>
+
+      <!-- 视图 1: 库存总览 -->
+      <main class="view-container active" id="view-stock">
+        <div class="stock-toolbar">
+          <div class="quick-filters" id="quick-filters">
+            <button class="qfilter active" data-filter="">全部</button>
+            <button class="qfilter" data-filter="low_stock">低库存</button>
+            <button class="qfilter" data-filter="zero_stock">零库存</button>
+            <button class="qfilter" data-filter="unassigned">待归位</button>
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn-action btn-secondary btn-sm" id="btn-select-mode">
+              <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+              <span>批量</span>
+            </button>
+            <button class="btn-action btn-primary btn-sm" id="btn-add-material">
+              <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+              <span>建档</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="batch-bar" id="batch-bar" style="display: none;">
+          <label class="batch-select-all">
+            <input type="checkbox" id="batch-select-all"> 全选本页
+          </label>
+          <span class="batch-count">已选 <b id="batch-count">0</b> 款</span>
+          <div style="flex: 1;"></div>
+          <button class="btn-action btn-primary btn-sm" id="btn-batch-location">
+            <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+            <span>归位到库位</span>
+          </button>
+          <button class="btn-action btn-secondary btn-sm" id="btn-batch-cancel">退出</button>
+        </div>
+
+        <div id="material-list"></div>
+
+        <div id="stock-empty" class="empty-state" style="display: none;">
+          <svg style="width: 40px; height: 40px; color: var(--muted-light);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+          <div style="font-weight: 600; font-size: 14px; color: var(--surface-foreground);">未找到匹配元器件</div>
+          <div style="font-size: 12px; color: var(--muted);">请尝试更换搜索关键字、筛选条件，或点击右上角「建档」新增物料</div>
+        </div>
+
+        <!-- 库存列表底部翻页栏 -->
+        <div id="stock-pagination" style="display: none; justify-content: space-between; align-items: center; margin-top: 14px; padding: 12px 10px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px;">
+          <button class="btn-action btn-secondary btn-sm" id="btn-stock-prev">上一页</button>
+          <span style="font-family: var(--font-mono); color: var(--muted);" id="stock-page-indicator">第 1 / 1 页</span>
+          <button class="btn-action btn-secondary btn-sm" id="btn-stock-next">下一页</button>
+        </div>
+      </main>
+
+      <!-- 视图 2: 扫码中心 -->
+      <main class="view-container" id="view-scan">
+        <div class="scan-layout">
+          <div class="scanner-container">
+            <div class="camera-box" id="camera-box">
+              <div id="qr-reader"></div>
+              <div class="camera-corners"></div>
+              <div class="scanner-laser-line" id="scanner-laser-line"></div>
+              <div class="camera-placeholder" id="camera-placeholder">
+                <svg style="width: 40px; height: 40px; color: var(--muted-light);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7V5a2 2 0 012-2h2m10 0h2a2 2 0 012 2v2m0 10v2a2 2 0 01-2 2h-2M5 21H3a2 2 0 01-2-2v-2M7 12h10"/></svg>
+                <div style="font-weight: 600; font-size: 14px; color: var(--surface-foreground);">对准立创物料袋二维码</div>
+                <div style="font-size: 11px; color: var(--muted); max-width: 220px;">自动识别 C编号、型号与数量，调出出入库面板；未建档可一键录入</div>
+              </div>
+            </div>
+
+            <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display: none;">
+
+            <div class="camera-controls">
+              <button class="btn-action btn-primary" id="btn-start-camera">
+                <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                <span>实时扫码</span>
+              </button>
+              <button class="btn-action btn-secondary" id="btn-photo-scan">
+                <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                <span>拍照 / 选图识别</span>
+              </button>
+            </div>
+
+            <div class="manual-input-row">
+              <input type="text" id="manual-code-input" placeholder="手动输入 C编号 或粘贴条码内容，回车解析" autocomplete="off">
+              <button class="btn-action btn-secondary btn-sm" id="btn-manual-parse">解析</button>
+            </div>
+
+            <div class="scan-mode-row">
+            <span class="scan-mode-label">连续模式</span>
+            <div class="scan-mode-seg" id="scan-mode-seg">
+              <button data-mode="normal" class="active">普通</button>
+              <button data-mode="in">连续入库</button>
+              <button data-mode="out">连续出库</button>
+            </div>
+          </div>
+          <div class="batch-session-bar" id="batch-session-bar" style="display: none;">
+            <span>已扫 <b id="bs-count">0</b> 款</span>
+            <span>累计 <b id="bs-pieces" class="ok-text">0</b> 件</span>
+            <span id="bs-fail-box" style="display:none;">异常 <b id="bs-fail" class="err-text">0</b></span>
+            <div style="flex:1;"></div>
+            <button class="btn-action btn-secondary btn-sm" id="btn-batch-finish">结束本次</button>
+          </div>
+
+          <!-- 扫码结果：库中已有 -->
+            <div class="scan-result-card" id="scan-result-card">
+              <div class="scan-result-top">
+                <span class="card-code" id="res-code">C------</span>
+                <span class="card-location assigned" id="res-location">未分配</span>
+              </div>
+              <div class="card-title" id="res-title">物料名称</div>
+              <div class="card-meta">
+                <span class="meta-tag" id="res-brand">品牌</span>
+                <span class="meta-tag" id="res-pkg">封装</span>
+                <span class="meta-tag" id="res-cat">分类</span>
+              </div>
+              <div class="scan-result-actions">
+                <div class="res-qty-box">
+                  <span style="font-size: 11px; color: var(--muted);">现存</span>
+                  <span class="res-qty-num" id="res-qty">0</span>
+                  <span style="font-size: 11px; color: var(--muted);" id="res-unit">个</span>
+                </div>
+                <div class="res-ops">
+                  <input type="text" inputmode="numeric" id="res-custom-qty" value="1" aria-label="数量">
+                  <button class="btn-action btn-secondary btn-sm" id="btn-res-minus">出库</button>
+                  <button class="btn-action btn-primary btn-sm" id="btn-res-plus">入库</button>
+                  <button class="btn-action btn-secondary btn-sm icon-only" id="btn-res-detail" title="查看详情">
+                    <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 扫码结果：库中未建档 -->
+            <div class="scan-result-card scan-new-card" id="scan-new-card">
+              <div class="scan-new-badge">新料 · 库中未建档</div>
+              <div class="scan-new-info">
+                <div class="scan-new-row"><span class="card-code" id="new-code">C------</span></div>
+                <div class="scan-new-row" id="new-model" style="font-weight: 600; font-size: 13px;">识别到的型号</div>
+                <div class="scan-new-row" style="font-size: 12px; color: var(--muted);" id="new-qty-hint">标签数量: --</div>
+              </div>
+              <button class="btn-action btn-primary" id="btn-scan-create" style="width: 100%;">
+                <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                <span>一键建档入库</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 桌面端侧栏：扫码指南 + 会话扫码记录 -->
+          <aside class="scan-side">
+            <div class="panel">
+              <div class="panel-title">扫码指南</div>
+              <ul class="scan-tips">
+                <li><b>📷 实时扫码</b>调用摄像头对准包装袋二维码，自动识别编号与标签数量</li>
+                <li><b>🖼 拍照 / 选图识别</b>实时识别失败时，拍照走后端增强引擎二次解析，模糊反光也能识别</li>
+                <li><b>⌨️ 扫码枪</b>USB / 蓝牙扫码枪即插即用，全程无需碰鼠标，扫完自动弹出结果</li>
+                <li><b>📍 库位标签</b>扫「LOC:」开头的收纳盒签，直达该库位的物料清单</li>
+                <li><b>✨ 新料建档</b>扫到库里没有的编号时，会给出建档面板，带出标签数量一键入库</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <div class="panel-title-row">
+                <span class="panel-title">本次扫码记录</span>
+                <span class="link-btn" id="btn-clear-scan-history">清空</span>
+              </div>
+              <div id="scan-history" class="scan-history">
+                <div class="dash-empty">暂无记录，扫一个试试</div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </main>
+
+      <!-- 视图 3: 库位看板 -->
+      <main class="view-container" id="view-location">
+        <div class="loc-toolbar">
+          <span style="font-size: 13.5px; font-weight: 700; color: var(--surface-foreground);">收纳盒物理位置图谱</span>
+          <div class="loc-toolbar-actions">
+            <button class="btn-action btn-secondary btn-sm" id="btn-print-all-labels">
+              <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+              <span>打印全部标签</span>
+            </button>
+            <button class="btn-action btn-primary btn-sm" id="btn-create-location">＋ 新建库位</button>
+            <span class="link-btn" id="btn-filter-unassigned">待归位物料 ❯</span>
+          </div>
+        </div>
+        <div class="location-grid" id="location-grid"></div>
+      </main>
+
+      <!-- 视图 4: 管理与看板 -->
+      <main class="view-container" id="view-tools">
+        <div class="tools-wrap">
+          <!-- 管理页 4 大分栏 Tab 控制条 -->
+          <div class="tools-tab-bar" id="tools-tab-bar">
+            <button class="tools-tab-btn active" data-tab="tab-overview">📊 资产看板</button>
+            <button class="tools-tab-btn" data-tab="tab-import">📥 导入与备份</button>
+            <button class="tools-tab-btn" data-tab="tab-logs">🕒 出入库轨迹</button>
+            <button class="tools-tab-btn" data-tab="tab-system">⚙️ 桌面与系统</button>
+          </div>
+
+          <!-- 分栏 1: 资产看板 -->
+          <div class="tools-tab-pane active" id="pane-tab-overview">
+          <!-- 统计看板 -->
+          <div class="panel">
+            <div class="panel-title">库存资产指标看板</div>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-label">库存总资产 (估值)</div>
+                <div class="stat-val accent" id="stat-asset-val">￥0.00</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">器件品类 (SKU)</div>
+                <div class="stat-val primary" id="stat-sku">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">实物库存总数</div>
+                <div class="stat-val accent" id="stat-pieces">0</div>
+              </div>
+              <div class="stat-card" id="stat-lowstock-card" role="button" title="点击查看低库存物料">
+                <div class="stat-label">低库存 / 断货</div>
+                <div class="stat-val warning" id="stat-lowstock">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">已归位物料</div>
+                <div class="stat-val" id="stat-assigned">0</div>
+              </div>
+              <div class="stat-card" id="stat-unassigned-card" role="button" title="点击查看待归位物料">
+                <div class="stat-label">待贴标入盒物料</div>
+                <div class="stat-val warning" id="stat-unassigned">0</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 数据看板 -->
+          <div class="panel">
+            <div class="panel-title">分类资产价值 Top 12</div>
+            <div id="dash-cat-bars" class="dash-bars"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title-row">
+              <span class="panel-title">近 7 天出入库趋势</span>
+              <span class="trend-legend">
+                <span class="legend-item"><i class="legend-dot in"></i>入库</span>
+                <span class="legend-item"><i class="legend-dot out"></i>出库</span>
+              </span>
+            </div>
+            <div id="dash-trend" class="dash-trend"></div>
+          </div>
+          </div>
+          <!-- 结束分栏 1: 资产看板 -->
+
+          <!-- 分栏 2: 导入与备份 -->
+          <div class="tools-tab-pane" id="pane-tab-import">
+
+          <!-- 立创对账单导入 -->
+          <div class="panel">
+            <div class="panel-title">立创新订单 / 对账单批量导入</div>
+            <div class="panel-desc">支持立创商城导出的订单对账单 Excel (.xlsx / .xls)、CSV 或 JSON，系统自动增量去重并累加在库数量。</div>
+            <input type="file" id="import-file-input" accept=".xlsx,.xls,.csv,.json" style="display: none;">
+            <button class="btn-action btn-secondary import-drop" id="btn-trigger-import">
+              <svg style="width: 16px; height: 16px; color: var(--muted);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              <span>选择或拖拽对账单文件上传</span>
+            </button>
+          </div>
+
+          <!-- 低库存补货清单 -->
+          <div class="panel">
+            <div class="panel-title-row">
+              <span class="panel-title">低库存补货清单</span>
+              <div style="display:flex; gap:8px;">
+                <button class="btn-action btn-secondary btn-sm" id="btn-restock-refresh">刷新</button>
+                <button class="btn-action btn-primary btn-sm" id="btn-restock-copy">复制采购清单</button>
+              </div>
+            </div>
+            <div class="panel-desc" id="restock-summary">按预警线自动生成：目标库存 = 预警线 × 2。</div>
+            <div id="restock-list" class="restock-list"><div class="dash-empty">加载中…</div></div>
+          </div>
+
+          <!-- 项目领料统计 -->
+          <div class="panel">
+            <div class="panel-title">项目用料统计（出库口径）</div>
+            <div class="panel-desc">在详情弹窗或出库时填写项目名，即可按项目累计用料与成本。</div>
+            <div id="project-stats" class="dash-bars"><div class="dash-empty">暂无带项目标签的出库记录</div></div>
+          </div>
+
+          <!-- 手机 App 安装 -->
+          <div class="panel">
+            <div class="panel-title">安装到手机桌面（PWA）</div>
+            <div class="panel-desc">安卓：点击下方按钮或浏览器菜单「安装应用 / 添加到主屏幕」；iPhone：Safari 打开本页 → 分享 → 「添加到主屏幕」。安装后全屏运行，HTTPS 端口 (:8089) 可直接调用摄像头扫码。</div>
+            <button class="btn-action btn-primary" id="btn-install-pwa" style="display:none; width:100%;">
+              <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              <span>安装 PinBox 引脚仓</span>
+            </button>
+          </div>
+
+          <!-- 数据安全备份与导出 -->
+          <div class="panel">
+            <div class="panel-title">数据备份与恢复</div>
+            <div class="panel-desc">定期下载全量备份（含物料 / 流水 / 库位）；恢复会覆盖当前全部数据，请谨慎操作。</div>
+            <div class="backup-grid">
+              <a href="/api/export?format=csv" class="btn-action btn-secondary" download id="a-export-csv">导出 CSV 表格</a>
+              <a href="/api/backup" class="btn-action btn-secondary" download id="a-export-json">下载全量备份</a>
+              <input type="file" id="restore-file-input" accept=".json" style="display: none;">
+              <button class="btn-action btn-danger-ghost" id="btn-restore">从备份恢复…</button>
+            </div>
+            <div class="auto-backup-row">
+              <span id="auto-backup-info" style="font-size: 11px; color: var(--muted);">每日 03:00 自动备份最近 30 份到服务器 data/backups/</span>
+              <button class="btn-action btn-secondary btn-sm" id="btn-backup-now">立即备份</button>
+            </div>
+          </div>
+          </div>
+          <!-- 结束分栏 2: 导入与备份 -->
+
+          <!-- 分栏 3: 出入库轨迹 -->
+          <div class="tools-tab-pane" id="pane-tab-logs">
+
+          <!-- 最近出入库流水 -->
+          <div class="panel">
+            <div class="panel-title-row">
+              <span class="panel-title">最近出入库轨迹</span>
+              <div class="logs-search">
+                <input type="text" id="logs-search-input" placeholder="按C编号/型号/事由过滤...">
+                <button class="btn-action btn-secondary btn-sm" id="btn-logs-search">过滤</button>
+              </div>
+            </div>
+            <div class="logs-filters">
+              <div class="logs-type-chips" id="logs-type-chips">
+                <button class="qfilter active" data-type="">全部</button>
+                <button class="qfilter" data-type="in">入库</button>
+                <button class="qfilter" data-type="out">出库</button>
+                <button class="qfilter" data-type="adjust">调整</button>
+              </div>
+              <select class="logs-time-select" id="logs-time-select" aria-label="时间范围">
+                <option value="">全部时间</option>
+                <option value="1">今天</option>
+                <option value="7">近 7 天</option>
+                <option value="30">近 30 天</option>
+              </select>
+            </div>
+            <div id="recent-logs" class="logs-list"></div>
+            <div class="logs-pagination">
+              <button class="btn-action btn-secondary btn-sm" id="btn-logs-prev">上一页</button>
+              <span id="logs-page-indicator">第 1 页</span>
+              <button class="btn-action btn-secondary btn-sm" id="btn-logs-next">下一页</button>
+            </div>
+          </div>
+          </div>
+          <!-- 结束分栏 3: 出入库轨迹 -->
+
+          <!-- 分栏 4: 证书与设备系统 -->
+          <div class="tools-tab-pane" id="pane-tab-system">
+            <!-- 局域网 CA 根证书下载与信任卡片 -->
+            <div class="panel">
+              <div class="panel-title">添加到手机桌面（免安装直达）</div>
+              <div class="panel-desc">局域网环境下，直接创建快捷方式即可获得与独立 App 完全相同的全屏体验：</div>
+              <div style="margin-top: 10px; font-size: 12px; color: var(--surface-foreground); line-height: 1.8; background: var(--surface); padding: 12px 14px; border-radius: 6px; border: 1px solid var(--border-subtle);">
+                <div><b>📱 安卓手机 (Edge / Chrome / 系统自带浏览器)：</b></div>
+                <div>1. 点击浏览器底部或右上角菜单按钮（三个点 <code>...</code> 或 <code>☰</code>）；</div>
+                <div>2. 选择 <b>【添加到主屏幕】</b> 或 <b>【创建快捷方式】</b>；</div>
+                <div>3. 手机桌面即可生成专属的 <b>PinBox</b> 芯片图标，点击一键直达！</div>
+                <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
+                  <b>🍎 苹果手机 (iPhone / Safari)：</b> 点击底部中间的分享图标 ➔ 滑动选择 <b>【添加到主屏幕】</b> 即可。
+                </div>
+              </div>
+            </div>
+
+          <!-- 数据中心：离线模式与同步 -->
+          <div class="panel">
+            <div class="panel-title">数据中心 · 离线与同步</div>
+            <div class="panel-desc">手机装到桌面后可完全离线使用（数据存本机）；回到局域网后把离线变更推送到服务器，或拉取服务器最新库存覆盖本机。</div>
+            <div class="sync-grid">
+              <div class="form-group">
+                <label class="form-label">运行模式</label>
+                <div class="scan-mode-seg" id="data-mode-seg" style="max-width: 260px;">
+                  <button data-mode="server">服务器在线</button>
+                  <button data-mode="local">本地离线</button>
+                </div>
+              </div>
+              <div class="form-group" style="flex: 1; min-width: 220px;">
+                <label class="form-label">服务器地址（同步用）</label>
+                <input type="text" class="form-input" id="input-server-url" placeholder="http://192.168.1.219:8088">
+              </div>
+            </div>
+            <div class="sync-actions">
+              <button class="btn-action btn-secondary btn-sm" id="btn-sync-test">测试连接</button>
+              <button class="btn-action btn-secondary btn-sm" id="btn-sync-pull">从服务器拉取</button>
+              <button class="btn-action btn-primary btn-sm" id="btn-sync-push">推送离线变更 (<span id="pending-count">0</span>)</button>
+            </div>
+            <div class="sync-status" id="sync-status"></div>
+          </div>
+
+          <div class="about-card">
+            PinBox 引脚仓 WORKBENCH V3.5 · 数据库 SQLite · 局域网服务 192.168.1.219:8088 (HTTPS :8089)
+          </div>
+          </div>
+          <!-- 结束分栏 4: 证书与设备系统 -->
+        </div>
+      </main>
+
+      <!-- 视图 5: BOM 核对 -->
+      <main class="view-container" id="view-bom">
+        <div class="tools-wrap">
+          <div class="panel">
+            <div class="panel-title">BOM 一键核对：库存命中与成本估算</div>
+            <div class="panel-desc">粘贴 BOM 文本（每行：<b>型号〔封装…〕 数量</b>，空格/Tab/逗号均可）或上传立创/嘉立创EDA导出的 BOM 表格。系统逐行智能匹配库存（支持同规格跨品牌匹配），给出缺料与成本。</div>
+            <textarea class="form-input bom-textarea" id="bom-text" rows="9" placeholder="KF301-5.0-2P    3
+XL1509-5.0E1    1
+SS34    2
+470uF50V10x20KM    1
+0603WAJ0103T5E    6
+C25703 5 ..."></textarea>
+            <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+              <button class="btn-action btn-primary" id="btn-bom-check" style="flex: 1; min-width: 160px;">
+                <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <span>解析并核对库存</span>
+              </button>
+              <input type="file" id="bom-file-input" accept=".xlsx,.xls,.csv,.txt" style="display: none;">
+              <button class="btn-action btn-secondary" id="btn-bom-file">
+                <svg style="width: 14px; height: 14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                <span>上传 BOM 表格文件</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel" id="bom-summary-panel" style="display: none;">
+            <div class="panel-title-row">
+              <span class="panel-title">核对结果</span>
+              <div style="display:flex; gap:8px;">
+                <button class="btn-action btn-secondary btn-sm" id="btn-bom-export">导出 CSV</button>
+                <button class="btn-action btn-secondary btn-sm" id="btn-bom-copy-missing">复制缺料清单</button>
+              </div>
+            </div>
+            <div class="stats-grid" id="bom-summary"></div>
+            <div class="bom-table-wrap">
+              <table class="bom-table">
+                <thead>
+                  <tr>
+                    <th style="width:34px;">#</th>
+                    <th>BOM 型号 / 规格</th>
+                    <th style="width:52px;">需求</th>
+                    <th style="min-width:150px;">匹配库存物料</th>
+                    <th style="width:64px;">在库</th>
+                    <th style="width:70px;">状态</th>
+                    <th style="width:76px; text-align:right;">小计(元)</th>
+                  </tr>
+                </thead>
+                <tbody id="bom-results"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- 移动端底部导航栏 -->
+  <nav class="bottom-nav">
+    <div class="nav-item active" data-view="view-stock">
+      <span class="nav-icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg></span>
+      <span>库存</span>
+    </div>
+    <div class="nav-item" data-view="view-scan">
+      <span class="nav-icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7V5a2 2 0 012-2h2m10 0h2a2 2 0 012 2v2m0 10v2a2 2 0 01-2 2h-2M5 21H3a2 2 0 01-2-2v-2M7 12h10"/></svg></span>
+      <span>扫码</span>
+    </div>
+    <div class="nav-item" data-view="view-location">
+      <span class="nav-icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg></span>
+      <span>库位</span>
+    </div>
+    <div class="nav-item" data-view="view-tools">
+      <span class="nav-icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg></span>
+      <span>管理</span>
+    </div>
+    <div class="nav-item" data-view="view-bom">
+      <span class="nav-icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg></span>
+      <span>BOM</span>
+    </div>
+  </nav>
+
+  <!-- 库位归位弹窗（单个/批量共用） -->
+  <div class="modal-overlay" id="location-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-title" id="loc-modal-title">物理存放库位配置</span>
+        <button class="btn-close" id="btn-close-loc-modal">✕</button>
+      </div>
+      <div id="loc-modal-items-box" class="loc-modal-items"></div>
+      <div class="form-group">
+        <label class="form-label" for="input-new-location">物理格位编号（如：A-01-02 或 阻容盒1号）</label>
+        <input type="text" class="form-input" id="input-new-location" placeholder="输入或选择收纳盒/抽屉格位编号，留空表示移出库位" list="loc-datalist">
+        <datalist id="loc-datalist"></datalist>
+      </div>
+      <div>
+        <div class="quick-tags-title">快捷填入已有库位:</div>
+        <div class="quick-tags" id="quick-loc-tags"></div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn-action btn-secondary" id="btn-goto-manage-loc" style="flex: 0 0 auto;">管理库位</button>
+        <button class="btn-action btn-primary" id="btn-save-location" style="flex: 1;">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 物料建档/编辑弹窗 -->
+  <div class="modal-overlay" id="material-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-title" id="material-modal-title">新建物料档案</span>
+        <button class="btn-close" id="btn-close-material-modal">✕</button>
+      </div>
+      <form id="material-form" autocomplete="off">
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="mf-code">C 编号 *</label>
+            <input type="text" class="form-input" id="mf-code" placeholder="C25703" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="mf-category">分类</label>
+            <input type="text" class="form-input" id="mf-category" placeholder="主控芯片" list="category-datalist">
+            <datalist id="category-datalist"></datalist>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="mf-model">型号 / 名称 *</label>
+          <input type="text" class="form-input" id="mf-model" placeholder="ESP32-C3-WROOM-02" required>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="mf-brand">品牌</label>
+            <input type="text" class="form-input" id="mf-brand" placeholder="乐鑫">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="mf-package">封装</label>
+            <input type="text" class="form-input" id="mf-package" placeholder="0805 / SOT-23">
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="mf-quantity">入库数量（建档时）</label>
+            <input type="text" inputmode="numeric" class="form-input" id="mf-quantity" placeholder="0">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="mf-unit">单位</label>
+            <input type="text" class="form-input" id="mf-unit" placeholder="个 / 颗 / 米">
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="mf-price">单价 (元)</label>
+            <input type="text" inputmode="decimal" class="form-input" id="mf-price" placeholder="2.36">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="mf-min-stock">最低库存（预警线）</label>
+            <input type="text" inputmode="numeric" class="form-input" id="mf-min-stock" placeholder="0 = 不预警">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="mf-location">存放库位</label>
+          <input type="text" class="form-input" id="mf-location" placeholder="A-01-02" list="loc-datalist">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="mf-use">用途 / 实验场景</label>
+          <textarea class="form-input" id="mf-use" rows="2" placeholder="用于什么项目、什么实验"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="mf-remark">备注</label>
+          <input type="text" class="form-input" id="mf-remark" placeholder="可选">
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 4px;">
+          <button type="button" class="btn-action btn-danger-ghost" id="btn-delete-material" style="display: none;">删除</button>
+          <button type="submit" class="btn-action btn-primary" id="btn-submit-material" style="flex: 1;">保存物料</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 库位新建/编辑弹窗 -->
+  <div class="modal-overlay" id="loc-manage-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-title" id="loc-manage-title">新建库位</span>
+        <button class="btn-close" id="btn-close-loc-manage">✕</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="lm-name">库位名称 *</label>
+        <input type="text" class="form-input" id="lm-name" placeholder="A-01-02 或 阻容盒3号">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="lm-note">备注（存放内容描述）</label>
+        <input type="text" class="form-input" id="lm-note" placeholder="如：0805 阻容 / MCU 开发板">
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button type="button" class="btn-action btn-danger-ghost" id="btn-delete-location" style="display: none;">删除库位</button>
+        <button class="btn-action btn-primary" id="btn-save-loc-manage" style="flex: 1;">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 物料详情弹窗 -->
+  <div class="modal-overlay" id="detail-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-title">元器件参数档案</span>
+        <button class="btn-close" id="btn-close-detail-modal">✕</button>
+      </div>
+      <div class="detail-body">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="card-code" id="detail-code">C000000</span>
+          <span class="card-location assigned" id="detail-location">未分配</span>
+        </div>
+        <div class="detail-title" id="detail-title">商品型号</div>
+        <div class="card-meta" id="detail-meta"></div>
+        <div class="card-use" id="detail-use">用途说明</div>
+
+        <div class="detail-actions">
+          <button class="btn-action btn-secondary btn-sm" id="btn-detail-edit">
+            <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+            <span>编辑档案</span>
+          </button>
+          <button class="btn-action btn-secondary btn-sm" id="btn-detail-print">
+            <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+            <span>打印标签</span>
+          </button>
+          <a class="btn-action btn-secondary btn-sm" id="detail-lcsc-link" href="#" target="_blank" rel="noopener" title="在立创商城查看实时价格与数据手册">
+            <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            <span>立创页面</span>
+          </a>
+          <button class="btn-action btn-secondary btn-sm" id="btn-detail-loc">
+            <svg style="width: 13px; height: 13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <span>设库位</span>
+          </button>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">物料采购定价 (元)</div>
+          <div class="detail-inline-form">
+            <input type="text" inputmode="decimal" class="form-input" id="detail-price-input" placeholder="输入单价，如 2.36 或 0.05">
+            <button class="btn-action btn-secondary btn-sm" id="btn-save-price">保存定价</button>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-section-title">库存微调</div>
+          <div class="detail-inline-form">
+            <input type="text" inputmode="numeric" class="form-input" id="detail-delta-input" placeholder="输入变动值，如 +5 或 -2">
+            <input type="text" class="form-input" id="detail-project-input" placeholder="关联项目(可选)" style="max-width: 120px;">
+            <button class="btn-action btn-primary btn-sm" id="btn-apply-stock-delta">应用</button>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">出入库轨迹</div>
+          <div id="detail-logs" class="detail-logs"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用确认弹窗 -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal-content modal-content-sm">
+      <div class="modal-header">
+        <span class="modal-title" id="confirm-title">确认操作</span>
+        <button class="btn-close" id="btn-close-confirm">✕</button>
+      </div>
+      <div class="confirm-msg" id="confirm-msg">确定执行该操作吗？</div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn-action btn-secondary" id="btn-confirm-cancel" style="flex: 1;">取消</button>
+        <button class="btn-action btn-danger" id="btn-confirm-ok" style="flex: 1;">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">操作成功</div>
+
+  <script src="/js/app.js?v=202610271500"></script>
+</body>
+</html>

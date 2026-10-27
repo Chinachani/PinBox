@@ -1,0 +1,136 @@
+name: Build PinBox Multi-Platform Releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # =========================================================================
+  # 1. 编译 Windows 独立免安装可执行程序 (.exe)
+  # =========================================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      - name: Build Standalone Windows EXE
+        run: |
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "PinBox" `
+            --icon "frontend/icons/icon.svg" `
+            --add-data "frontend;frontend" `
+            --hidden-import "uvicorn" `
+            --hidden-import "fastapi" `
+            --hidden-import "openpyxl" `
+            --hidden-import "xlrd" `
+            --hidden-import "zxingcpp" `
+            --hidden-import "PIL" `
+            backend/main.py
+
+      - name: Archive Windows Artifact
+        run: |
+          Compress-Archive -Path dist/PinBox/* -DestinationPath dist/PinBox-Windows-x64.zip
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PinBox-Windows-x64
+          path: dist/PinBox-Windows-x64.zip
+
+  # =========================================================================
+  # 2. 编译 Linux 原生通用安装包 (.deb) 与二进制包
+  # =========================================================================
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg fakeroot libarchive-tools
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      - name: Build Linux Binary
+        run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "pinbox" \
+            --add-data "frontend:frontend" \
+            --hidden-import "uvicorn" \
+            --hidden-import "fastapi" \
+            --hidden-import "openpyxl" \
+            --hidden-import "xlrd" \
+            --hidden-import "zxingcpp" \
+            --hidden-import "PIL" \
+            backend/main.py
+
+      - name: Package Debian (.deb)
+        run: |
+          mkdir -p deb-pkg/opt/pinbox deb-pkg/usr/bin deb-pkg/usr/share/applications deb-pkg/usr/share/icons/hicolor/192x192/apps deb-pkg/DEBIAN
+          cp -r dist/pinbox/* deb-pkg/opt/pinbox/
+          cp frontend/icons/icon-192.png deb-pkg/usr/share/icons/hicolor/192x192/apps/pinbox.png
+
+          # 启动脚本
+          cat << 'EOF' > deb-pkg/usr/bin/pinbox
+          #!/bin/bash
+          cd /opt/pinbox && exec ./pinbox "$@"
+          EOF
+          chmod +x deb-pkg/usr/bin/pinbox
+
+          # 桌面快捷方式
+          cat << 'EOF' > deb-pkg/usr/share/applications/pinbox.desktop
+          [Desktop Entry]
+          Name=PinBox
+          Comment=PinBox 元器件库位与BOM管理系统
+          Exec=/usr/bin/pinbox
+          Icon=pinbox
+          Terminal=false
+          Type=Application
+          Categories=Development;Electronics;Utility;
+          EOF
+
+          # 控制清单
+          cat << 'EOF' > deb-pkg/DEBIAN/control
+          Package: pinbox
+          Version: 1.0.0
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Chinachani
+          Description: PinBox - Smart Electronics Inventory & BOM Manager
+          EOF
+
+          dpkg-deb --build deb-pkg dist/pinbox_1.0.0_amd64.deb
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PinBox-Linux-deb
+          path: dist/pinbox_1.0.0_amd64.deb

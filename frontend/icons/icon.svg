@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- 背景极深深空工控渐变 -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#020617;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- 芯片主体金属质感渐变 -->
+    <linearGradient id="chipGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f172a;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- 核心仓抽屉透光渐变 -->
+    <linearGradient id="glowBox" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0284c7;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- 1. App 图标圆角容器（适配 iOS / Android） -->
+  <rect width="512" height="512" rx="116" fill="url(#bgGrad)"/>
+  <rect width="508" height="508" x="2" y="2" rx="114" fill="none" stroke="#1e293b" stroke-width="3"/>
+
+  <!-- 2. QFP 芯片引脚阵列 (Pins) - 四边对称精密引脚 -->
+  <!-- 顶边引脚 (Top Pins) -->
+  <rect x="186" y="80" width="16" height="42" rx="4" fill="#64748b"/>
+  <rect x="220" y="80" width="16" height="42" rx="4" fill="#64748b"/>
+  <rect x="254" y="80" width="16" height="42" rx="4" fill="#0284c7"/>
+  <rect x="288" y="80" width="16" height="42" rx="4" fill="#64748b"/>
+  <rect x="322" y="80" width="16" height="42" rx="4" fill="#64748b"/>
+
+  <!-- 底边引脚 (Bottom Pins) -->
+  <rect x="186" y="390" width="16" height="42" rx="4" fill="#64748b"/>
+  <rect x="220" y="390" width="16" height="42" rx="4" fill="#64748b"/>
+  <rect x="254" y="390" width="16" height="42" rx="4" fill="#0284c7"/>
+  <rect x="288" y="390" width="16" height="42" rx="4" fill="#64748b"/>
+  <rect x="322" y="390" width="16" height="42" rx="4" fill="#64748b"/>
+
+  <!-- 左边引脚 (Left Pins) -->
+  <rect x="80" y="186" width="42" height="16" rx="4" fill="#64748b"/>
+  <rect x="80" y="220" width="42" height="16" rx="4" fill="#64748b"/>
+  <rect x="80" y="254" width="42" height="16" rx="4" fill="#0284c7"/>
+  <rect x="80" y="288" width="42" height="16" rx="4" fill="#64748b"/>
+  <rect x="80" y="322" width="42" height="16" rx="4" fill="#64748b"/>
+
+  <!-- 右边引脚 (Right Pins) -->
+  <rect x="390" y="186" width="42" height="16" rx="4" fill="#64748b"/>
+  <rect x="390" y="220" width="42" height="16" rx="4" fill="#64748b"/>
+  <rect x="390" y="254" width="42" height="16" rx="4" fill="#0284c7"/>
+  <rect x="390" y="288" width="42" height="16" rx="4" fill="#64748b"/>
+  <rect x="390" y="322" width="42" height="16" rx="4" fill="#64748b"/>
+
+  <!-- 3. 芯片/封装外壳 (Chip Body) -->
+  <rect x="116" y="116" width="280" height="280" rx="32" fill="url(#chipGrad)" stroke="#334155" stroke-width="4"/>
+  <!-- 一号引脚标记点 (Pin 1 Dot) -->
+  <circle cx="152" cy="152" r="9" fill="#0284c7"/>
+
+  <!-- 4. 收纳盒/抽屉矩阵 (The 2x2 Box Compartment Matrix) -->
+  <!-- 左上抽屉 (Box 1) -->
+  <rect x="176" y="176" width="70" height="70" rx="14" fill="#0b1322" stroke="#1e293b" stroke-width="3"/>
+  <line x1="195" y1="211" x2="227" y2="211" stroke="#334155" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- 右上抽屉 (Box 2 - 激活状态/透光核心仓) -->
+  <rect x="266" y="176" width="70" height="70" rx="14" fill="url(#glowBox)" stroke="#38bdf8" stroke-width="2"/>
+  <line x1="285" y1="211" x2="317" y2="211" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- 左下抽屉 (Box 3) -->
+  <rect x="176" y="266" width="70" height="70" rx="14" fill="#0b1322" stroke="#1e293b" stroke-width="3"/>
+  <line x1="195" y1="301" x2="227" y2="301" stroke="#334155" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- 右下抽屉 (Box 4) -->
+  <rect x="266" y="266" width="70" height="70" rx="14" fill="#0b1322" stroke="#1e293b" stroke-width="3"/>
+  <line x1="285" y1="301" x2="317" y2="301" stroke="#334155" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,160 @@
+// ============================================================
+// DataLayer - 服务器/离线双模式数据层 + 同步
+// ============================================================
+const DataLayer = {
+  mode: localStorage.getItem('wms-mode') || 'server',   // 'server' | 'local'
+  serverUrl: (localStorage.getItem('wms-server-url') || '').replace(/\/+$/, ''),
+
+  setMode(mode) {
+    this.mode = mode;
+    localStorage.setItem('wms-mode', mode);
+  },
+
+  setServerUrl(url) {
+    this.serverUrl = (url || '').trim().replace(/\/+$/, '');
+    localStorage.setItem('wms-server-url', this.serverUrl);
+  },
+
+  // 统一请求入口：返回 Response-like 对象 {ok,status,json()}
+  async api(path, opts = {}) {
+    if (this.mode === 'local') {
+      return LocalAPI.handle(opts.method || 'GET', path, opts);
+    }
+    const base = this.mode === 'server' && this.serverUrl ? this.serverUrl : '';
+    const res = await fetch(base + path, opts);
+    return res;
+  }
+};
+
+async function api(path, opts = {}) {
+  return DataLayer.api(path, opts);
+}
+
+// ---------- 同步功能 ----------
+
+async function syncTestConnection() {
+  const base = DataLayer.serverUrl;
+  if (!base) return { ok: false, msg: '请先填写服务器地址' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(base + '/api/stats', { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      const d = await res.json();
+      return { ok: true, msg: `连接成功：${d.total_sku} 款物料 / ${d.total_pieces} 件` };
+    }
+    return { ok: false, msg: `服务器响应异常 (HTTP ${res.status})` };
+  } catch (e) {
+    clearTimeout(timer);
+    return { ok: false, msg: '连接失败：服务器不可达（检查地址与同一局域网）' };
+  }
+}
+
+// 把本地离线操作推送到服务器
+async function syncPushOps() {
+  const base = DataLayer.serverUrl;
+  if (!base) return { ok: false, msg: '请先填写服务器地址' };
+  const ops = await LocalDB.getAll('pending_ops');
+  if (!ops.length) return { ok: true, msg: '没有待推送的离线变更', pushed: 0 };
+  ops.sort((a, b) => a.id - b.id);
+
+  let pushed = 0, failed = 0, failMsg = '';
+  for (const op of ops) {
+    let res, data;
+    try {
+      switch (op.kind) {
+        case 'stock':
+          res = await fetch(`${base}/api/materials/${op.code}/stock`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delta: op.delta, reason: (op.reason || '') + '（离线同步）', project: op.project || '' })
+          });
+          break;
+        case 'create':
+          res = await fetch(`${base}/api/materials`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(op.payload)
+          });
+          break;
+        case 'update':
+          res = await fetch(`${base}/api/materials/${op.code}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(op.payload)
+          });
+          break;
+        case 'delete':
+          res = await fetch(`${base}/api/materials/${op.code}`, { method: 'DELETE' });
+          break;
+        case 'location_create':
+          res = await fetch(`${base}/api/locations`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: op.name, note: op.note })
+          });
+          break;
+        case 'location_update':
+          res = await fetch(`${base}/api/locations/${op.id}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(op.payload)
+          });
+          break;
+        case 'location_delete':
+          res = await fetch(`${base}/api/locations/${op.id}?force=true`, { method: 'DELETE' });
+          break;
+        case 'batch_location':
+          res = await fetch(`${base}/api/batch-location`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ codes: op.codes, location: op.location })
+          });
+          break;
+        default:
+          failed++; failMsg = `未知操作类型 ${op.kind}`;
+          continue;
+      }
+      data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        await LocalDB.delete('pending_ops', op.id);
+        pushed++;
+      } else if (res.status === 400 && /已存在/.test(data.detail || '')) {
+        // 建档冲突：转为更新
+        if (op.kind === 'create' && op.payload && op.payload.code) {
+          const { code, ...payload } = op.payload;
+          const r2 = await fetch(`${base}/api/materials/${code}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (r2.ok) { await LocalDB.delete('pending_ops', op.id); pushed++; continue; }
+        }
+        // 其他 400（如库存不足）视为业务性失败，丢弃该条避免死循环
+        await LocalDB.delete('pending_ops', op.id);
+        failed++; failMsg = data.detail || '';
+      } else {
+        failed++; failMsg = data.detail || `HTTP ${res.status}`;
+        break; // 网络/服务器异常时保留剩余操作，下次再推
+      }
+    } catch (e) {
+      failed++; failMsg = '网络错误';
+      break;
+    }
+  }
+  return { ok: failed === 0, msg: `推送完成：成功 ${pushed} 条` + (failed ? `，失败 ${failed} 条（${failMsg}）` : ''), pushed };
+}
+
+// 从服务器拉取全量快照覆盖本地
+async function syncPullSnapshot() {
+  const base = DataLayer.serverUrl;
+  if (!base) return { ok: false, msg: '请先填写服务器地址' };
+  try {
+    const res = await fetch(base + '/api/backup');
+    if (!res.ok) return { ok: false, msg: `拉取失败 (HTTP ${res.status})` };
+    const data = await res.json();
+    if (!data.materials || !data.materials.length) return { ok: false, msg: '服务器上没有物料数据' };
+    await LocalAPI.restoreSnapshot(data);
+    return { ok: true, msg: `拉取成功：${data.materials.length} 款物料 / ${(data.locations || []).length} 个库位 / ${(data.stock_logs || []).length} 条流水` };
+  } catch (e) {
+    return { ok: false, msg: '拉取失败：服务器不可达' };
+  }
+}
+
+async function syncPendingCount() {
+  return LocalDB.count('pending_ops');
+}
