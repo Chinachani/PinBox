@@ -10,6 +10,16 @@ function isStandaloneApp() {
     || window.navigator.standalone === true;   // iOS Safari 添加到主屏
 }
 
+// 与 package.json 同步的版本号（发版时一起改）
+const APP_VERSION = '1.0.9';
+// 用户自己的服务器（独立端首次使用时预置，免手填）
+const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
+
+// 独立端首次启动：预置服务器地址，让「拉取/推送」开箱即用
+if (isStandaloneApp() && !localStorage.getItem('wms-server-url')) {
+  localStorage.setItem('wms-server-url', DEFAULT_SERVER_URL);
+}
+
 const DataLayer = {
   // 独立端（APK/桌面 PWA）默认本地离线模式；网页访问默认服务器模式。
   // 用户手动切换过则尊重 localStorage 的选择。

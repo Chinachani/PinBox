@@ -1118,6 +1118,18 @@ def backup_now():
     return {"message": f"备份完成: {name}", "name": name}
 
 
+# --- 版本信息 ---
+
+@app.get("/api/version")
+def get_version():
+    pkg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "package.json")
+    try:
+        with open(pkg_path, encoding="utf-8") as f:
+            v = json.load(f).get("version", "dev")
+    except Exception:
+        v = "dev"
+    return {"version": v}
+
 # --- 找料模式 ---
 
 @app.get("/api/find")

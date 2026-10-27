@@ -13,6 +13,7 @@ services:
       - ./certs:/app/certs
       - ./backend:/app/backend
       - ./frontend:/app/frontend
+      - ./package.json:/app/package.json:ro
     command: ["python", "backend/main.py"]
     environment:
       - TZ=Asia/Shanghai

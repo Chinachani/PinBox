@@ -264,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadCategories();
   loadLocations(true);
   initCategoryScrollFade();
+  loadAboutInfo();
 
   // 深链支持：库位标签二维码（?loc=）与物料标签（?code=）打开页面直达
   const urlLoc = new URLSearchParams(window.location.search).get('loc');
@@ -275,6 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMaterials();
   initLiveSync();
   initHoverCard();
+  maybeOnboard();
 
   if (urlLoc) {
     // 深链进来直接切库存视图并高亮过滤条件
@@ -515,6 +517,43 @@ function initSearch() {
     if (e.key === 'Escape') {
       closeAllModals();
     }
+  });
+}
+
+// 底部信息条：版本/模式/地址 全动态
+async function loadAboutInfo() {
+  const el = $('about-card');
+  if (!el) return;
+  const sideVer = $('sidebar-version');
+  if (sideVer) sideVer.innerText = `WORKBENCH v${APP_VERSION}`;
+
+  if (DataLayer.mode === 'local') {
+    el.innerHTML = `PinBox 引脚仓 v${APP_VERSION} · 本地离线模式 · 数据存于本机浏览器（IndexedDB）`;
+    return;
+  }
+  let serverVer = '';
+  try {
+    const res = await api('/api/version');
+    if (res.ok) {
+      const d = await res.json();
+      serverVer = d.version;
+      if (sideVer) sideVer.innerText = `WORKBENCH v${serverVer}`;
+    }
+  } catch (e) { /* 忽略 */ }
+  const addr = DataLayer.serverUrl || `${location.protocol}//${location.host}`;
+  el.innerHTML = `PinBox 引脚仓 v${serverVer || APP_VERSION} · 服务器 SQLite · ${escapeHtml(addr.replace(/^https?:\/\//, ''))}`;
+}
+
+// 独立端首次使用引导：本地库为空时提醒去数据中心拉取
+function maybeOnboard() {
+  if (!isStandaloneApp?.() || DataLayer.mode !== 'local') return;
+  if (localStorage.getItem('wms-onboarded')) return;
+  LocalDB.count('materials').then(n => {
+    if (n > 0) return;
+    localStorage.setItem('wms-onboarded', '1');
+    setTimeout(() => {
+      showToast('📱 独立端首次使用：本地库为空，去「管理 → 数据中心」点「从服务器拉取」', 'info', 6000);
+    }, 1500);
   });
 }
 
