@@ -37,7 +37,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --onedir --windowed `
             --name "PinBox" `
-            --icon "frontend/icons/icon.svg" `
+            --icon "frontend/icons/icon-512.png" `
             --add-data "frontend;frontend" `
             --hidden-import "uvicorn" `
             --hidden-import "fastapi" `
