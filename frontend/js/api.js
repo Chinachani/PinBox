@@ -31,7 +31,12 @@ async function nativeRequest(method, url, bodyObj) {
   if (typeof data === 'string') {
     try { data = JSON.parse(data); } catch (e) { /* 保留原始字符串 */ }
   }
-  return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => data };
+  return {
+    ok: r.status >= 200 && r.status < 300,
+    status: r.status,
+    json: async () => data,
+    text: async () => (typeof data === 'string' ? data : JSON.stringify(data))
+  };
 }
 
 // 局域网/本机地址判定：这类地址的服务器是自签证书，原生层 TLS 校验必失败
@@ -68,7 +73,7 @@ function resolveSyncBase(raw) {
 }
 
 // 与 package.json 同步的版本号（发版时一起改）
-const APP_VERSION = '1.0.18';
+const APP_VERSION = '1.0.19';
 // 用户自己的服务器（独立端首次使用时预置，免手填）
 const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
 
@@ -106,6 +111,21 @@ const DataLayer = {
       return LocalAPI.handle(opts.method || 'GET', path, opts);
     }
     const base = this.mode === 'server' && this.serverUrl ? this.serverUrl : '';
+    // APK 原生壳：JSON 请求统一走原生 HTTP，绕开 WebView 对局域网 http 地址的混合内容限制；
+    // FormData/Blob（导入、恢复上传）无原生等价实现，回退 fetch
+    const body = opts.body;
+    const isUpload = body instanceof FormData || body instanceof Blob;
+    if (base && isNativeHttpAvailable() && !isUpload) {
+      let bodyObj;
+      if (body && typeof body === 'object') bodyObj = body;
+      else if (typeof body === 'string' && body) {
+        try { bodyObj = JSON.parse(body); } catch (e) { bodyObj = undefined; }
+      }
+      // 非 JSON 字符串（表单编码等）解析不出来 → 落回 fetch
+      if (typeof body !== 'string' || bodyObj !== undefined) {
+        return nativeRequest(opts.method || 'GET', base + path, bodyObj);
+      }
+    }
     const res = await fetch(base + path, opts);
     return res;
   }

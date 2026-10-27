@@ -2859,3 +2859,13 @@ input[type="number"] {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+
+/* 危险区（清空全部数据） */
+.danger-zone {
+  margin-top: 14px;
+  border: 1px dashed rgba(229, 72, 77, 0.55);
+  background: color-mix(in srgb, #e5484d 5%, var(--surface-raised));
+}
+.danger-zone .panel-title {
+  color: #e5484d;
+}

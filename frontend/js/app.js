@@ -2258,6 +2258,35 @@ function initImport() {
     }
   });
 
+  // 清空全部数据（危险区）：服务器模式清服务器，本地模式清 IndexedDB
+  $('btn-wipe').addEventListener('click', async () => {
+    const isLocal = DataLayer.mode === 'local';
+    const ok = await showConfirm('清空全部数据',
+      isLocal
+        ? '将删除本机离线库的全部物料、流水、库位与待推送变更（服务器不受影响）。确定继续吗？'
+        : '将删除服务器上全部物料、流水与库位，清空前会自动生成一份完整备份到 data/backups/。此操作用于彻底重建库存，确定继续吗？',
+      '确认清空');
+    if (!ok) return;
+    try {
+      const res = await api('/api/wipe?confirm=yes', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(data.backup ? `已清空全部数据，已自动备份：${data.backup}` : '已清空本地数据', 'success', 3600);
+        state.initialLoaded = false;
+        loadStats();
+        loadMaterials();
+        loadCategories();
+        loadLocations();
+        loadDashboard();
+        loadRecentLogs();
+      } else {
+        showToast(data.detail || '清空失败', 'error', 3200);
+      }
+    } catch (err) {
+      showToast('清空请求失败：' + (err.message || ''), 'error', 3200);
+    }
+  });
+
   // 备份恢复
   $('btn-restore').addEventListener('click', () => $('restore-file-input').click());
   $('restore-file-input').addEventListener('change', async (e) => {

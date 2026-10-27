@@ -12,12 +12,12 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="PinBox">
-  <link rel="stylesheet" href="/css/style.css?v=202610281800">
-  <script src="/js/html5-qrcode.min.js?v=202610281800"></script>
-  <script src="/js/qrcode.min.js?v=202610281800"></script>
-  <script src="/js/local-db.js?v=202610281800"></script>
-  <script src="/js/local-api.js?v=202610281800"></script>
-  <script src="/js/api.js?v=202610281800"></script>
+  <link rel="stylesheet" href="/css/style.css?v=202610281900">
+  <script src="/js/html5-qrcode.min.js?v=202610281900"></script>
+  <script src="/js/qrcode.min.js?v=202610281900"></script>
+  <script src="/js/local-db.js?v=202610281900"></script>
+  <script src="/js/local-api.js?v=202610281900"></script>
+  <script src="/js/api.js?v=202610281900"></script>
 </head>
 <body>
 
@@ -427,6 +427,13 @@
               <button class="btn-action btn-secondary btn-sm" id="btn-backup-now">立即备份</button>
             </div>
           </div>
+
+          <!-- 危险区：清空全部数据 -->
+          <div class="panel danger-zone">
+            <div class="panel-title">⚠️ 危险区</div>
+            <div class="panel-desc">一键清空全部数据（物料 / 流水 / 库位），仅建议彻底重建库存时使用。服务器模式清空时会先自动生成一份完整备份到 data/backups/。</div>
+            <button class="btn-action btn-danger-ghost" id="btn-wipe">清空全部数据…</button>
+          </div>
           </div>
           <!-- 结束分栏 2: 导入与备份 -->
 
@@ -800,6 +807,6 @@ C25703 5 ..."></textarea>
 
   <div class="toast" id="toast">操作成功</div>
 
-  <script src="/js/app.js?v=202610281800"></script>
+  <script src="/js/app.js?v=202610281900"></script>
 </body>
 </html>

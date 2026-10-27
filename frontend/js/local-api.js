@@ -848,6 +848,15 @@ const LocalAPI = (() => {
         return okJson({ message: '恢复完成', materials: data.materials.length, locations: (data.locations || []).length, logs: (data.stock_logs || []).length });
       }
 
+      // ---- 清空全部本地数据 ----
+      if (p === '/api/wipe' && method === 'POST') {
+        await LocalDB.clear('logs');
+        await LocalDB.clear('materials');
+        await LocalDB.clear('locations');
+        await LocalDB.clear('pending_ops');
+        return okJson({ message: '已清空本地数据', backup: null });
+      }
+
       // ---- 导出 CSV（本地） ----
       if (p === '/api/export' && method === 'GET') {
         const mats = await LocalDB.getAll('materials');

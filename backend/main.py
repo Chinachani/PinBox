@@ -847,6 +847,22 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = Query(""))
     await notify_change("restore", "")
     return {"message": "恢复完成", "materials": mat_count, "logs": log_count, "locations": loc_count}
 
+@app.post("/api/wipe")
+async def wipe_database(confirm: str = Query("")):
+    """清空全部业务数据（物料/流水/库位），用于彻底重建库存。清空前自动生成一份完整备份。"""
+    if confirm != "yes":
+        raise HTTPException(status_code=400, detail="缺少确认参数，拒绝清空")
+    backup_name = _run_backup()
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM stock_logs")
+    c.execute("DELETE FROM materials")
+    c.execute("DELETE FROM locations")
+    conn.commit()
+    conn.close()
+    await notify_change("wipe", "")
+    return {"message": "已清空全部数据", "backup": backup_name}
+
 @app.get("/api/logs")
 def get_logs(
     q: Optional[str] = None,
