@@ -1157,6 +1157,9 @@ html:not([data-theme]) .icon-moon { display: block; }
 }
 
 #qr-reader {
+  /* 绝对定位铺满底框：未开摄像头时不占 flex 主轴，避免把占位提示挤到右侧 */
+  position: absolute;
+  inset: 0;
   width: 100% !important;
   height: 100% !important;
   border: none !important;
