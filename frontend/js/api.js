@@ -10,6 +10,30 @@ function isStandaloneApp() {
     || window.navigator.standalone === true;   // iOS Safari 添加到主屏
 }
 
+// App 内原生 HTTP：走原生 HttpURLConnection，绕开 WebView 的混合内容/CORS 限制
+function isNativeHttpAvailable() {
+  try {
+    return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+      && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp);
+  } catch (e) { return false; }
+}
+
+async function nativeRequest(method, url, bodyObj) {
+  const CHttp = window.Capacitor.Plugins.CapacitorHttp;
+  const opts = {
+    url,
+    method: method.toUpperCase(),
+    headers: { 'Content-Type': 'application/json' }
+  };
+  if (bodyObj !== undefined) opts.data = bodyObj;
+  const r = await CHttp.request(opts);
+  let data = r.data;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch (e) { /* 保留原始字符串 */ }
+  }
+  return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => data };
+}
+
 // 同步地址解析：
 //   - 浏览器 PWA（https 页面）禁止请求 http 接口 → 自动升级为 https 并换 8089 口
 //   - Capacitor 原生壳按原样使用（已开启 cleartext，走 http 8088）
@@ -23,7 +47,7 @@ function resolveSyncBase(raw) {
 }
 
 // 与 package.json 同步的版本号（发版时一起改）
-const APP_VERSION = '1.0.11';
+const APP_VERSION = '1.0.12';
 // 用户自己的服务器（独立端首次使用时预置，免手填）
 const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
 
@@ -72,7 +96,12 @@ async function syncTestConnection() {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
-    const res = await fetch(base + '/api/stats', { signal: ctrl.signal });
+    let res;
+    if (isNativeHttpAvailable()) {
+      res = await nativeRequest('GET', base + '/api/stats');
+    } else {
+      res = await fetch(base + '/api/stats', { signal: ctrl.signal });
+    }
     clearTimeout(timer);
     if (res.ok) {
       const d = await res.json();
@@ -81,7 +110,7 @@ async function syncTestConnection() {
     return { ok: false, msg: `服务器响应异常 (HTTP ${res.status})` };
   } catch (e) {
     clearTimeout(timer);
-    return { ok: false, msg: '连接失败：请确认手机连的是家里 WiFi（4G 访问不到局域网地址）；App 端请使用 http://…:8088 端口' };
+    return { ok: false, msg: '连接失败：' + (e.message || '网络不可达') + '。请确认手机连的是家里 WiFi（4G 访问不到局域网地址）' };
   }
 }
 
@@ -93,52 +122,69 @@ async function syncPushOps() {
   if (!ops.length) return { ok: true, msg: '没有待推送的离线变更', pushed: 0 };
   ops.sort((a, b) => a.id - b.id);
 
+  const useNative = isNativeHttpAvailable();
   let pushed = 0, failed = 0, failMsg = '';
   for (const op of ops) {
     let res, data;
     try {
       switch (op.kind) {
         case 'stock':
-          res = await fetch(`${base}/api/materials/${op.code}/stock`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ delta: op.delta, reason: (op.reason || '') + '（离线同步）', project: op.project || '' })
-          });
+          res = useNative
+            ? await nativeRequest('POST', `${base}/api/materials/${op.code}/stock`, { delta: op.delta, reason: (op.reason || '') + '（离线同步）', project: op.project || '' })
+            : await fetch(`${base}/api/materials/${op.code}/stock`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delta: op.delta, reason: (op.reason || '') + '（离线同步）', project: op.project || '' })
+              });
           break;
         case 'create':
-          res = await fetch(`${base}/api/materials`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(op.payload)
-          });
+          res = useNative
+            ? await nativeRequest('POST', `${base}/api/materials`, op.payload)
+            : await fetch(`${base}/api/materials`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(op.payload)
+              });
           break;
         case 'update':
-          res = await fetch(`${base}/api/materials/${op.code}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(op.payload)
-          });
+          res = useNative
+            ? await nativeRequest('PUT', `${base}/api/materials/${op.code}`, op.payload)
+            : await fetch(`${base}/api/materials/${op.code}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(op.payload)
+              });
           break;
         case 'delete':
-          res = await fetch(`${base}/api/materials/${op.code}`, { method: 'DELETE' });
+          res = useNative
+            ? await nativeRequest('DELETE', `${base}/api/materials/${op.code}`)
+            : await fetch(`${base}/api/materials/${op.code}`, { method: 'DELETE' });
           break;
         case 'location_create':
-          res = await fetch(`${base}/api/locations`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: op.name, note: op.note })
-          });
+          res = useNative
+            ? await nativeRequest('POST', `${base}/api/locations`, { name: op.name, note: op.note })
+            : await fetch(`${base}/api/locations`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: op.name, note: op.note })
+              });
           break;
         case 'location_update':
-          res = await fetch(`${base}/api/locations/${op.id}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(op.payload)
-          });
+          res = useNative
+            ? await nativeRequest('PUT', `${base}/api/locations/${op.id}`, op.payload)
+            : await fetch(`${base}/api/locations/${op.id}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(op.payload)
+              });
           break;
         case 'location_delete':
-          res = await fetch(`${base}/api/locations/${op.id}?force=true`, { method: 'DELETE' });
+          res = useNative
+            ? await nativeRequest('DELETE', `${base}/api/locations/${op.id}?force=true`)
+            : await fetch(`${base}/api/locations/${op.id}?force=true`, { method: 'DELETE' });
           break;
         case 'batch_location':
-          res = await fetch(`${base}/api/batch-location`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ codes: op.codes, location: op.location })
-          });
+          res = useNative
+            ? await nativeRequest('POST', `${base}/api/batch-location`, { codes: op.codes, location: op.location })
+            : await fetch(`${base}/api/batch-location`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ codes: op.codes, location: op.location })
+              });
           break;
         default:
           failed++; failMsg = `未知操作类型 ${op.kind}`;
@@ -152,10 +198,12 @@ async function syncPushOps() {
         // 建档冲突：转为更新
         if (op.kind === 'create' && op.payload && op.payload.code) {
           const { code, ...payload } = op.payload;
-          const r2 = await fetch(`${base}/api/materials/${code}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
+          const r2 = useNative
+            ? await nativeRequest('PUT', `${base}/api/materials/${code}`, payload)
+            : await fetch(`${base}/api/materials/${code}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
           if (r2.ok) { await LocalDB.delete('pending_ops', op.id); pushed++; continue; }
         }
         // 其他 400（如库存不足）视为业务性失败，丢弃该条避免死循环
@@ -178,9 +226,16 @@ async function syncPullSnapshot() {
   const base = resolveSyncBase(DataLayer.serverUrl);
   if (!base) return { ok: false, msg: '请先填写服务器地址' };
   try {
-    const res = await fetch(base + '/api/backup');
-    if (!res.ok) return { ok: false, msg: `拉取失败 (HTTP ${res.status})` };
-    const data = await res.json();
+    let res, data;
+    if (isNativeHttpAvailable()) {
+      res = await nativeRequest('GET', base + '/api/backup');
+      data = await res.json();
+    } else {
+      res = await fetch(base + '/api/backup');
+      if (!res.ok) return { ok: false, msg: `拉取失败 (HTTP ${res.status})` };
+      data = await res.json();
+    }
+    if (!data.materials || !data.materials.length) return { ok: false, msg: '服务器上没有物料数据' };
     if (!data.materials || !data.materials.length) return { ok: false, msg: '服务器上没有物料数据' };
     await LocalAPI.restoreSnapshot(data);
     return { ok: true, msg: `拉取成功：${data.materials.length} 款物料 / ${(data.locations || []).length} 个库位 / ${(data.stock_logs || []).length} 条流水` };
