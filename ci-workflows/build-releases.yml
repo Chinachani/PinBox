@@ -28,26 +28,28 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python Dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install pyinstaller
 
       - name: Build Standalone Windows EXE
+        shell: bash
         run: |
-          pyinstaller --noconfirm --onedir --windowed `
-            --name "PinBox" `
-            --icon "frontend/icons/icon.svg" `
-            --add-data "frontend;frontend" `
-            --hidden-import "uvicorn" `
-            --hidden-import "fastapi" `
-            --hidden-import "openpyxl" `
-            --hidden-import "xlrd" `
-            --hidden-import "zxingcpp" `
-            --hidden-import "PIL" `
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "PinBox" \
+            --add-data "frontend;frontend" \
+            --hidden-import "uvicorn" \
+            --hidden-import "fastapi" \
+            --hidden-import "openpyxl" \
+            --hidden-import "xlrd" \
+            --hidden-import "zxingcpp" \
+            --hidden-import "PIL" \
             backend/main.py
 
       - name: Archive Windows Artifact
+        shell: pwsh
         run: |
           Compress-Archive -Path dist/PinBox/* -DestinationPath dist/PinBox-Windows-x64.zip
 
@@ -180,12 +182,11 @@ jobs:
           path: dist/PinBox-v1.0.0.apk
 
   # =========================================================================
-  # 4. 发布 GitHub Release（当推送 v* Tag 或手动触发时）
+  # 4. 发布 GitHub Release（当推送 v* Tag 或无论 main 分支还是手动触发）
   # =========================================================================
   publish-release:
     name: Publish Release Packages
     needs: [build-windows, build-linux, build-android]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows Artifact
@@ -206,11 +207,11 @@ jobs:
           name: PinBox-Android-APK
           path: release-assets
 
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || 'v1.0.0' }}
-          name: "PinBox 引脚仓 Release ${{ github.ref_name || 'v1.0.0' }}"
+          tag_name: 'v1.0.0'
+          name: 'PinBox 引脚仓 Release v1.0.0'
           draft: false
           prerelease: false
           generate_release_notes: true
