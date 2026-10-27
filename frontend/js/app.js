@@ -716,8 +716,12 @@ function initScanner() {
       state.scanMode = btn.dataset.mode;
       if (state.scanMode === 'normal') {
         $('batch-session-bar').style.display = 'none';
+        $('batch-records').style.display = 'none';
       } else {
         $('batch-session-bar').style.display = 'flex';
+        $('batch-records').style.display = 'flex';
+        clearBatchRecords();
+        state.batchStats = { count: 0, pieces: 0, fail: 0 };
         updateBatchSessionBar();
         showToast(state.scanMode === 'in'
           ? '连续入库模式：每扫一袋按标签数量自动入库（同袋 10 秒内不重复计）'
@@ -729,6 +733,7 @@ function initScanner() {
     const s = state.batchStats;
     showToast(`本次连续${state.scanMode === 'out' ? '出库' : '入库'}结束：${s.count} 款 / ${Math.abs(s.pieces)} 件` + (s.fail ? ` / 异常 ${s.fail}` : ''), 'success', 3600);
     state.batchStats = { count: 0, pieces: 0, fail: 0 };
+    clearBatchRecords();
     updateBatchSessionBar();
   });
 
@@ -786,12 +791,14 @@ async function startCamera() {
     await state.html5QrCode.start(
       { facingMode: 'environment' },
       {
-        fps: 15,
-        // 识别区域取画面短边 70% 的正方形，与视觉取景框一致
+        fps: 10,
+        // 识别区取画面短边 62% 的正方形：二维码占框更满，远距离小码更容易命中
         qrbox: (vf) => {
-          const s = Math.round(Math.min(vf.width, vf.height) * 0.7);
+          const s = Math.round(Math.min(vf.width, vf.height) * 0.62);
           return { width: s, height: s };
-        }
+        },
+        // 视觉取景框同步缩小到 62%（CSS 用 176px 固定值，这里用变量对齐）
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
       },
       (decodedText) => {
         const now = Date.now();
@@ -909,7 +916,7 @@ function handleScanResultData(data) {
     if (state.scanMode !== 'normal') {
       const qty = (data.parsed && data.parsed.quantity) || 1;
       const delta = state.scanMode === 'in' ? Math.abs(qty) : -Math.abs(qty);
-      autoBatchStock(it.code, delta);
+      autoBatchStock(it.code, delta, it);
     }
   } else if (data.parsed && data.parsed.code) {
     $('new-code').innerText = data.parsed.code;
@@ -927,7 +934,7 @@ function handleScanResultData(data) {
 }
 
 // ---------- 8.5 连续扫码批量出入库 ----------
-async function autoBatchStock(code, delta) {
+async function autoBatchStock(code, delta, material) {
   const r = await adjustStockQuick(code, delta, {
     reason: delta > 0 ? '连续扫码批量入库' : '连续扫码批量出库',
     silent: true
@@ -937,10 +944,40 @@ async function autoBatchStock(code, delta) {
     s.count += 1;
     s.pieces += Math.abs(delta);
     showToast(`${code} ${delta > 0 ? '+' : ''}${delta} → 现存 ${r.result.current}`, 'success', 1400);
+    addBatchRecord({ code, model: material ? material.model : '', delta, ok: true, remaining: r.result.current });
   } else {
     s.fail += 1;
+    addBatchRecord({ code, model: material ? material.model : '', delta, ok: false, error: r.error });
   }
   updateBatchSessionBar();
+}
+
+// 逐笔记录：新记录插最上面，保留全部历史
+function addBatchRecord({ code, model, delta, ok, remaining, error }) {
+  const box = $('batch-records');
+  if (!box) return;
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const cls = ok ? (delta > 0 ? 'in' : 'out') : 'fail';
+  const div = document.createElement('div');
+  div.className = `batch-record-item ${cls}`;
+  div.innerHTML = ok
+    ? `<span class="bri-code">${escapeHtml(code)}</span>
+       <span class="bri-model">${escapeHtml(model || '')}</span>
+       <span class="bri-delta ${cls}">${delta > 0 ? '+' : ''}${delta}</span>
+       <span style="font-size: 10px; color: var(--muted); flex-shrink: 0;">现存${remaining}</span>
+       <span class="bri-time">${time}</span>`
+    : `<span class="bri-code">${escapeHtml(code)}</span>
+       <span class="bri-model">${escapeHtml(error || '操作失败')}</span>
+       <span class="bri-delta fail">失败</span>
+       <span class="bri-time">${time}</span>`;
+  box.prepend(div);
+}
+
+function clearBatchRecords() {
+  const box = $('batch-records');
+  if (box) box.innerHTML = '';
 }
 
 function updateBatchSessionBar() {

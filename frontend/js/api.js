@@ -1,8 +1,20 @@
 // ============================================================
 // DataLayer - 服务器/离线双模式数据层 + 同步
 // ============================================================
+// 独立运行环境判定：Capacitor 原生壳（APK）或 PWA standalone（安装到桌面）
+function isStandaloneApp() {
+  try {
+    if (window.Capacitor && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform()) return true;
+  } catch (e) { /* 非 Capacitor 环境 */ }
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;   // iOS Safari 添加到主屏
+}
+
 const DataLayer = {
-  mode: localStorage.getItem('wms-mode') || 'server',   // 'server' | 'local'
+  // 独立端（APK/桌面 PWA）默认本地离线模式；网页访问默认服务器模式。
+  // 用户手动切换过则尊重 localStorage 的选择。
+  mode: localStorage.getItem('wms-mode')
+    || (isStandaloneApp() ? 'local' : 'server'),
   serverUrl: (localStorage.getItem('wms-server-url') || '').replace(/\/+$/, ''),
 
   setMode(mode) {

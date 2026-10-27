@@ -628,6 +628,11 @@ html:not([data-theme]) .icon-moon { display: block; }
   display: none;
 }
 
+/* 批量选择模式：卡头右侧（库位标签/预警徽章）避开右上复选框 */
+.select-mode .card-top-right {
+  padding-right: 30px;
+}
+
 .card-top {
   display: flex;
   justify-content: space-between;
@@ -1389,8 +1394,9 @@ html:not([data-theme]) .icon-moon { display: block; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-right: 22px;
+  padding-right: 74px;   /* 三个 22px 操作钮 + 间距 */
   word-break: break-all;
+  min-height: 24px;
 }
 
 .loc-title .loc-glyph {
@@ -1432,6 +1438,23 @@ html:not([data-theme]) .icon-moon { display: block; }
   right: 8px;
   display: flex;
   gap: 4px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+}
+
+/* 窄屏：卡片太窄放不下「标题+三钮」同排，操作钮改为卡片顶部独立一行 */
+@media (max-width: 767.98px) {
+  .loc-card {
+    padding-top: 34px;   /* 顶部留出操作钮行 */
+  }
+  .loc-actions {
+    top: 7px;
+    right: 8px;
+  }
+  .loc-title {
+    padding-right: 0;
+  }
 }
 
 .loc-action-btn {
