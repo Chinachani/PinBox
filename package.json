@@ -1,6 +1,6 @@
 {
   "name": "pinbox",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "PinBox 引脚仓 - 智能元器件库位与BOM管理系统",
   "scripts": {
     "cap:sync": "cap sync android"

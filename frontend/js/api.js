@@ -23,7 +23,7 @@ function resolveSyncBase(raw) {
 }
 
 // 与 package.json 同步的版本号（发版时一起改）
-const APP_VERSION = '1.0.10';
+const APP_VERSION = '1.0.11';
 // 用户自己的服务器（独立端首次使用时预置，免手填）
 const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
 
