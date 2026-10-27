@@ -251,12 +251,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('btn-theme-toggle').addEventListener('click', toggleTheme);
 
+  // 分类下拉开关
+  $('btn-cat-dd').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleCatPanel();
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#cat-dropdown')) toggleCatPanel(false);
+  });
+
   loadStats();
   loadCategories();
   loadLocations(true);
+  initCategoryScrollFade();
+
+  // 深链支持：库位标签二维码（?loc=）与物料标签（?code=）打开页面直达
+  const urlLoc = new URLSearchParams(window.location.search).get('loc');
+  const urlCode = new URLSearchParams(window.location.search).get('code');
+  if (urlLoc) {
+    state.locationFilter = decodeURIComponent(urlLoc).trim();
+    renderLocFilterChip();
+  }
   loadMaterials();
   initLiveSync();
   initHoverCard();
+
+  if (urlLoc) {
+    // 深链进来直接切库存视图并高亮过滤条件
+    setTimeout(() => {
+      switchView('view-stock');
+      showToast(`已打开库位「${state.locationFilter}」的物料清单`, 'info', 2400);
+    }, 400);
+  } else if (urlCode) {
+    setTimeout(() => {
+      openDetailModal(decodeURIComponent(urlCode).trim().toUpperCase());
+    }, 800);
+  }
 });
 
 // ---------- 1. 导航 ----------
@@ -358,7 +388,7 @@ async function loadStats() {
 // ---------- 3. 分类 ----------
 async function loadCategories() {
   try {
-    const res = await api('/api/categories');
+    const res = await fetch('/api/categories');
     if (!res.ok) return;
     const cats = await res.json();
     state.categories = cats;
@@ -371,30 +401,59 @@ async function loadCategories() {
       chip.className = `cat-chip ${state.activeCategory === c.category ? 'active' : ''}`;
       chip.dataset.cat = c.category;
       chip.innerText = `${c.category} (${c.count})`;
-      chip.addEventListener('click', () => {
-        $$('.cat-chip').forEach(el => el.classList.remove('active'));
-        chip.classList.add('active');
-        state.activeCategory = c.category;
-        state.stockPage = 1;
-        loadMaterials();
-      });
+      chip.addEventListener('click', () => setCategory(c.category));
       container.appendChild(chip);
     });
+    container.querySelector('.cat-chip[data-cat=""]').addEventListener('click', () => setCategory(''));
 
-    container.querySelector('.cat-chip[data-cat=""]').addEventListener('click', () => {
-      $$('.cat-chip').forEach(el => el.classList.remove('active'));
-      container.querySelector('.cat-chip[data-cat=""]').classList.add('active');
-      state.activeCategory = '';
-      state.stockPage = 1;
-      loadMaterials();
-    });
+    // 桌面端下拉面板
+    const panel = $('cat-dd-panel');
+    if (panel) {
+      panel.innerHTML = `<div class="cat-chip ${state.activeCategory === '' ? 'active' : ''}" data-cat="">全部品类 (共 ${cats.reduce((s, c) => s + c.count, 0)} 款)</div>`;
+      cats.forEach(c => {
+        const chip = document.createElement('div');
+        chip.className = `cat-chip ${state.activeCategory === c.category ? 'active' : ''}`;
+        chip.dataset.cat = c.category;
+        chip.innerText = `${c.category} (${c.count})`;
+        chip.addEventListener('click', () => { setCategory(c.category); toggleCatPanel(false); });
+        panel.appendChild(chip);
+      });
+      panel.querySelector('.cat-chip[data-cat=""]').addEventListener('click', () => { setCategory(''); toggleCatPanel(false); });
+      syncCatDropdownText();
+    }
 
-    // 分类下拉数据
+    // 分类下拉数据（建档表单用）
     const dl = $('category-datalist');
     if (dl) dl.innerHTML = cats.map(c => `<option value="${escapeHtml(c.category)}">`).join('');
   } catch (e) {
     console.error('Failed to load categories', e);
   }
+}
+
+// 统一分类选择：chips 与下拉面板状态同步
+function setCategory(cat) {
+  state.activeCategory = cat;
+  state.stockPage = 1;
+  document.querySelectorAll('.cat-chip').forEach(el => {
+    el.classList.toggle('active', (el.dataset.cat || '') === cat);
+  });
+  syncCatDropdownText();
+  loadMaterials();
+}
+
+function syncCatDropdownText() {
+  const el = $('btn-cat-dd-text');
+  if (!el) return;
+  el.innerText = state.activeCategory ? `分类：${state.activeCategory}` : '全部分类';
+}
+
+function toggleCatPanel(force) {
+  const panel = $('cat-dd-panel');
+  const btn = $('btn-cat-dd');
+  if (!panel || !btn) return;
+  const open = force !== undefined ? force : !panel.classList.contains('open');
+  panel.classList.toggle('open', open);
+  btn.setAttribute('aria-expanded', open);
 }
 
 // ---------- 4. 搜索与快捷筛选 ----------
@@ -457,6 +516,17 @@ function initSearch() {
       closeAllModals();
     }
   });
+}
+
+// 移动端分类横滑渐隐：滚到最右移除右缘遮罩
+function initCategoryScrollFade() {
+  const el = $('cat-chips');
+  if (!el) return;
+  const update = () => {
+    el.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
+  };
+  el.addEventListener('scroll', update, { passive: true });
+  update();
 }
 
 // 库位过滤 chip（动态插入快捷筛选行首）

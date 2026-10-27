@@ -419,6 +419,54 @@ html:not([data-theme]) .icon-moon { display: block; }
   flex-shrink: 0;
 }
 
+/* 分类：桌面端下拉面板 */
+.cat-dropdown {
+  display: none;
+  position: relative;
+}
+
+@media (min-width: 768px) {
+  .category-scroll {
+    display: none !important;   /* 桌面改用下拉面板（app-header 的行内 flex 由 JS 设置，需强覆盖） */
+  }
+  .cat-dropdown {
+    display: block;
+  }
+}
+
+.cat-dd-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 12px;
+  display: none;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+  z-index: 60;
+}
+
+.cat-dd-panel.open {
+  display: grid;
+}
+
+.cat-dd-panel .cat-chip {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface);
+}
+
+.cat-dd-btn-active {
+  border-color: var(--primary) !important;
+  color: var(--primary) !important;
+}
+
 /* 分类标签横向滑动条 */
 .category-scroll {
   display: flex;
@@ -468,6 +516,18 @@ html:not([data-theme]) .icon-moon { display: block; }
   color: var(--surface);
   border-color: var(--surface-foreground);
   font-weight: 600;
+}
+
+/* 移动端分类横滑：右缘渐隐提示还有更多 */
+@media (max-width: 767.98px) {
+  .category-scroll {
+    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 91%, transparent 100%);
+    mask-image: linear-gradient(90deg, #000 0%, #000 91%, transparent 100%);
+  }
+  .category-scroll.at-end {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 
 /* 视图容器 */
