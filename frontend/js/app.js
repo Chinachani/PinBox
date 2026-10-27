@@ -785,7 +785,14 @@ async function startCamera() {
 
     await state.html5QrCode.start(
       { facingMode: 'environment' },
-      { fps: 15, qrbox: { width: 250, height: 250 } },
+      {
+        fps: 15,
+        // 识别区域取画面短边 70% 的正方形，与视觉取景框一致
+        qrbox: (vf) => {
+          const s = Math.round(Math.min(vf.width, vf.height) * 0.7);
+          return { width: s, height: s };
+        }
+      },
       (decodedText) => {
         const now = Date.now();
         const batch = state.scanMode !== 'normal';
@@ -799,10 +806,12 @@ async function startCamera() {
     );
 
     state.isCameraRunning = true;
+    $('camera-box').classList.add('running');
     btn.innerHTML = '<span>停止扫码</span>';
   } catch (err) {
     placeholder.style.display = 'flex';
     if (laserLine) laserLine.style.display = 'none';
+    $('camera-box').classList.remove('running');
     console.error('Camera start failed', err);
     showToast('摄像头不可用（HTTP 下浏览器限制），请使用【拍照/选图识别】或访问 HTTPS 端口', 'error', 3500);
   }
@@ -814,6 +823,7 @@ function stopCamera() {
     state.html5QrCode.stop().then(() => {
       state.html5QrCode.clear();
       state.isCameraRunning = false;
+      $('camera-box').classList.remove('running');
       $('camera-placeholder').style.display = 'flex';
       if (laserLine) laserLine.style.display = 'none';
       $('btn-start-camera').innerHTML = '<span>实时扫码</span>';

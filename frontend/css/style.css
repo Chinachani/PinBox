@@ -1007,8 +1007,8 @@ html:not([data-theme]) .icon-moon { display: block; }
 
 .camera-box {
   width: 100%;
-  aspect-ratio: 16 / 11;
-  max-width: 420px;
+  aspect-ratio: 4 / 5;
+  max-width: 400px;
   background: #0f141c;
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -1022,52 +1022,50 @@ html:not([data-theme]) .icon-moon { display: block; }
 
 /* 四角取景框 */
 .camera-box::before,
-.camera-box::after {
-  content: "";
-  position: absolute;
-  width: 26px;
-  height: 26px;
-  z-index: 6;
-  pointer-events: none;
-}
-.camera-box::before {
-  top: 14px;
-  left: 14px;
-  border-top: 2.5px solid #38bdf8;
-  border-left: 2.5px solid #38bdf8;
-  border-top-left-radius: 6px;
-}
-.camera-box::after {
-  bottom: 14px;
-  right: 14px;
-  border-bottom: 2.5px solid #38bdf8;
-  border-right: 2.5px solid #38bdf8;
-  border-bottom-right-radius: 6px;
-}
-
-/* 另外两个角（右上/左下），与 ::before/::after 凑齐四角取景框 */
+.camera-box::after,
 .camera-corners::before,
 .camera-corners::after {
   content: "";
   position: absolute;
   width: 26px;
   height: 26px;
-  z-index: 6;
+  z-index: 7;
   pointer-events: none;
+  display: none;
 }
-.camera-corners::before {
-  top: 14px;
-  right: 14px;
-  border-top: 2.5px solid #38bdf8;
-  border-right: 2.5px solid #38bdf8;
-  border-top-right-radius: 6px;
+
+/* 运行时四角显示，位置锚定引导框四角（相对 camera-box 居中偏移） */
+.camera-box.running::before {
+  display: block;
+  top: calc(50% - 88px - 6px);
+  left: calc(50% - 88px - 6px);
+  border-top: 3px solid #38bdf8;
+  border-left: 3px solid #38bdf8;
+  border-top-left-radius: 10px;
 }
-.camera-corners::after {
-  bottom: 14px;
-  left: 14px;
-  border-bottom: 2.5px solid #38bdf8;
-  border-left: 2.5px solid #38bdf8;
-  border-bottom-left-radius: 6px;
+.camera-box.running::after {
+  display: block;
+  bottom: calc(50% - 88px - 6px);
+  right: calc(50% - 88px - 6px);
+  border-bottom: 3px solid #38bdf8;
+  border-right: 3px solid #38bdf8;
+  border-bottom-right-radius: 10px;
+}
+.camera-box.running .camera-corners::before {
+  display: block;
+  top: calc(50% - 88px - 6px);
+  right: calc(50% - 88px - 6px);
+  border-top: 3px solid #38bdf8;
+  border-right: 3px solid #38bdf8;
+  border-top-right-radius: 10px;
+}
+.camera-box.running .camera-corners::after {
+  display: block;
+  bottom: calc(50% - 88px - 6px);
+  left: calc(50% - 88px - 6px);
+  border-bottom: 3px solid #38bdf8;
+  border-left: 3px solid #38bdf8;
+  border-bottom-left-radius: 10px;
 }
 
 #qr-reader {
@@ -2544,4 +2542,50 @@ input[type="number"] {
   font-size: 12px;
   min-height: 16px;
   color: var(--muted);
+}
+
+/* 方形二维码取景引导框：压暗四周 + 中心方块 */
+.qr-guide {
+  position: absolute;
+  width: 240px;
+  height: 240px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(56, 189, 248, 0.95);
+  border-radius: 14px;
+  z-index: 6;
+  pointer-events: none;
+  box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.38);
+  display: none;
+}
+
+.qr-guide::before,
+.qr-guide::after {
+  content: "";
+  position: absolute;
+  width: 26px;
+  height: 26px;
+}
+.qr-guide::before {
+  top: -3px;
+  left: -3px;
+  border-top: 4px solid #38bdf8;
+  border-left: 4px solid #38bdf8;
+  border-top-left-radius: 14px;
+}
+.qr-guide::after {
+  bottom: -3px;
+  right: -3px;
+  border-bottom: 4px solid #38bdf8;
+  border-right: 4px solid #38bdf8;
+  border-bottom-right-radius: 14px;
+}
+
+/* 扫码运行时显示引导框，隐藏库自带的宽条区域 */
+.camera-box.running .qr-guide { display: block; }
+.camera-box.running .camera-placeholder { display: none !important; }
+#qr-shaded-region,
+#qr-reader__scan_region {
+  display: none !important;
 }
