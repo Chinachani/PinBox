@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PinBox 引脚仓</string>
+    <string name="title_activity_main">PinBox 引脚仓</string>
+    <string name="package_name">com.chinachani.pinbox</string>
+    <string name="custom_url_scheme">com.chinachani.pinbox</string>
+</resources>

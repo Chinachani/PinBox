@@ -1,0 +1,8 @@
+{
+  "appId": "com.chinachani.pinbox",
+  "appName": "PinBox 引脚仓",
+  "webDir": "frontend",
+  "server": {
+    "androidScheme": "https"
+  }
+}

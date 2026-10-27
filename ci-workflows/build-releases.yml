@@ -1,4 +1,4 @@
-name: Build PinBox Multi-Platform Releases
+name: PinBox Multi-Platform Auto Build & Release
 
 on:
   push:
@@ -8,11 +8,15 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   # =========================================================================
-  # 1. 编译 Windows 独立免安装可执行程序 (.exe)
+  # 1. 编译 Windows 独立版程序 (PinBox.exe)
   # =========================================================================
   build-windows:
+    name: Build Windows EXE
     runs-on: windows-latest
     steps:
       - name: Checkout Repository
@@ -23,7 +27,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
@@ -54,9 +58,10 @@ jobs:
           path: dist/PinBox-Windows-x64.zip
 
   # =========================================================================
-  # 2. 编译 Linux 原生通用安装包 (.deb) 与二进制包
+  # 2. 编译 Linux 原生通用安装包 (pinbox_1.0.0_amd64.deb)
   # =========================================================================
   build-linux:
+    name: Build Linux DEB
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -67,13 +72,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install System Build Tools
+      - name: Install System & Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg fakeroot libarchive-tools
-
-      - name: Install Dependencies
-        run: |
+          sudo apt-get install -y dpkg fakeroot
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install pyinstaller
@@ -97,17 +99,15 @@ jobs:
           cp -r dist/pinbox/* deb-pkg/opt/pinbox/
           cp frontend/icons/icon-192.png deb-pkg/usr/share/icons/hicolor/192x192/apps/pinbox.png
 
-          # 启动脚本
           cat << 'EOF' > deb-pkg/usr/bin/pinbox
           #!/bin/bash
           cd /opt/pinbox && exec ./pinbox "$@"
           EOF
           chmod +x deb-pkg/usr/bin/pinbox
 
-          # 桌面快捷方式
           cat << 'EOF' > deb-pkg/usr/share/applications/pinbox.desktop
           [Desktop Entry]
-          Name=PinBox
+          Name=PinBox 引脚仓
           Comment=PinBox 元器件库位与BOM管理系统
           Exec=/usr/bin/pinbox
           Icon=pinbox
@@ -116,7 +116,6 @@ jobs:
           Categories=Development;Electronics;Utility;
           EOF
 
-          # 控制清单
           cat << 'EOF' > deb-pkg/DEBIAN/control
           Package: pinbox
           Version: 1.0.0
@@ -129,8 +128,93 @@ jobs:
 
           dpkg-deb --build deb-pkg dist/pinbox_1.0.0_amd64.deb
 
-      - name: Upload Linux Artifacts
+      - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PinBox-Linux-deb
           path: dist/pinbox_1.0.0_amd64.deb
+
+  # =========================================================================
+  # 3. 编译 Android 原生单机安装包 (PinBox.apk)
+  # =========================================================================
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install NPM Dependencies & Sync Web Assets
+        run: |
+          npm install
+          npx cap sync android
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x android/gradlew
+
+      - name: Build Android Release APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename and Prepare APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/PinBox-v1.0.0.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PinBox-Android-APK
+          path: dist/PinBox-v1.0.0.apk
+
+  # =========================================================================
+  # 4. 发布 GitHub Release（当推送 v* Tag 或手动触发时）
+  # =========================================================================
+  publish-release:
+    name: Publish Release Packages
+    needs: [build-windows, build-linux, build-android]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PinBox-Windows-x64
+          path: release-assets
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PinBox-Linux-deb
+          path: release-assets
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PinBox-Android-APK
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || 'v1.0.0' }}
+          name: "PinBox 引脚仓 Release ${{ github.ref_name || 'v1.0.0' }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release-assets/PinBox-Windows-x64.zip
+            release-assets/pinbox_1.0.0_amd64.deb
+            release-assets/PinBox-v1.0.0.apk
