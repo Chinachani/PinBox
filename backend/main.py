@@ -1214,6 +1214,124 @@ def export_excel():
     )
 
 
+# --- BOM 下单清单 Excel ---
+
+@app.post("/api/bom/order-excel")
+async def bom_order_excel(request: Request):
+    """把 BOM 核对结果转成可直接下单的 Excel：Sheet1 缺料采购清单，Sheet2 完整核对明细"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务器缺少 openpyxl")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="请求体解析失败")
+    items = body.get("items") or []
+    if not items:
+        raise HTTPException(status_code=400, detail="没有核对结果可导出")
+
+    thin = Side(style="thin", color="D0D7DE")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wb = Workbook()
+
+    def style_header(ws, headers, row=1):
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=h)
+            cell.font = Font(bold=True, size=10, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="0969DA")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+
+    # Sheet 1: 缺料采购清单
+    ws = wb.active
+    ws.title = "缺料采购清单"
+    ws.merge_cells("A1:G1")
+    t = ws["A1"]
+    t.value = f"PinBox 引脚仓 · BOM 采购清单（生成于 {now_local()}）"
+    t.font = Font(size=13, bold=True, color="FFFFFF")
+    t.fill = PatternFill("solid", fgColor="1F2328")
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    headers1 = ["序号", "C编号", "型号/规格", "品牌", "需采购数量", "参考单价(元)", "小计(元)"]
+    style_header(ws, headers1, 2)
+
+    order_rows = []
+    for it in items:
+        if it.get("status") == "ok":
+            continue
+        need = it.get("status") == "none" and it.get("qty") or (it.get("shortfall") or 0)
+        if need <= 0:
+            need = it.get("qty", 0)
+        price = it.get("matched_price") or 0
+        order_rows.append([
+            it.get("matched_code") or "",          # 无匹配留空，下单时人工搜索
+            it.get("matched_model") or it.get("model", ""),
+            it.get("matched_brand") or "",
+            need,
+            price,
+            round(price * need, 4),
+        ])
+
+    total = 0.0
+    for i, row in enumerate(order_rows):
+        r = i + 3
+        row[0] = i + 1 if not row[0] else row[0]  # 无编号用序号占位
+        # 序号列单独处理：第一列写编号或序号
+        for col, v in enumerate(row, 1):
+            cell = ws.cell(row=r, column=col, value=v)
+            cell.border = border
+            cell.font = Font(size=10)
+            if col >= 5:
+                cell.alignment = Alignment(horizontal="right")
+        total += row[5]
+
+    last = len(order_rows) + 3
+    ws.merge_cells(start_row=last, start_column=1, end_row=last, end_column=4)
+    s = ws.cell(row=last, column=1, value=f"待采购 {len(order_rows)} 行 · 预估合计 ￥{total:.2f}")
+    s.font = Font(bold=True, size=11)
+    s.fill = PatternFill("solid", fgColor="FFF8C5")
+    for i, w in enumerate([16, 40, 16, 12, 12, 12, 12], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A3"
+
+    # Sheet 2: 完整核对明细
+    ws2 = wb.create_sheet("核对明细")
+    headers2 = ["#", "BOM型号", "位号", "需求", "匹配C编号", "匹配型号", "在库", "状态", "缺口", "单价", "小计"]
+    style_header(ws2, headers2, 1)
+    statusText = {"ok": "库存充足", "insufficient": "库存不足", "none": "未找到"}
+    for i, it in enumerate(items):
+        r = i + 2
+        vals = [
+            i + 1, it.get("model", ""), it.get("ref", ""), it.get("qty", 1),
+            it.get("matched_code") or "", it.get("matched_model") or "",
+            it.get("stock_qty", "") if it.get("matched_code") else "",
+            statusText.get(it.get("status"), ""),
+            0 if it.get("status") == "ok" else (it.get("shortfall") or it.get("qty", 0)),
+            it.get("matched_price") or 0,
+            round((it.get("matched_price") or 0) * it.get("qty", 0), 4) if it.get("matched_price") else 0,
+        ]
+        for col, v in enumerate(vals, 1):
+            cell = ws2.cell(row=r, column=col, value=v)
+            cell.border = border
+            cell.font = Font(size=10)
+    for i, w in enumerate([6, 34, 14, 8, 12, 34, 8, 10, 8, 10, 10], 1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
+    ws2.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=pinbox_order_{datetime.now().strftime('%Y%m%d')}.xlsx"}
+    )
+
+
 # --- 立创比价 ---
 # 说明：立创商城有 JS 反爬盾（服务端纯 HTTP 拿不到价格），故此端点返回
 # 深度链接由前端直接打开（用户浏览器内有正常 cookie，可看实价）。

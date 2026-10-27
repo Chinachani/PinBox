@@ -2712,3 +2712,65 @@ input[type="number"] {
 .undo-bar .btn-action:hover {
   background: color-mix(in srgb, var(--surface) 12%, transparent);
 }
+
+/* 分类图标标签 */
+.cat-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cat-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--muted-light);
+}
+
+/* 桌面悬停快查浮窗 */
+#hover-card {
+  display: none;
+  position: fixed;
+  z-index: 85;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 10px 12px;
+  width: 240px;
+  pointer-events: none;
+  font-size: 12px;
+}
+
+.hc-code {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--primary);
+  font-size: 12px;
+}
+
+.hc-model {
+  font-weight: 600;
+  color: var(--surface-foreground);
+  margin: 3px 0 8px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hc-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--muted);
+}
+
+.hc-row b {
+  color: var(--surface-foreground);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}

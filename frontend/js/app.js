@@ -189,6 +189,54 @@ function initLiveSync() {
   } catch (e) { /* 浏览器不支持则忽略 */ }
 }
 
+// ---------- 桌面悬停快查浮窗 ----------
+let hoverCardEl = null;
+let hoverTimer = null;
+
+function initHoverCard() {
+  hoverCardEl = document.createElement('div');
+  hoverCardEl.id = 'hover-card';
+  document.body.appendChild(hoverCardEl);
+  const list = document.getElementById('material-list');
+
+  list.addEventListener('mouseover', (e) => {
+    const codeEl = e.target.closest('.card-code');
+    if (!codeEl || !window.matchMedia('(min-width: 768px)').matches) return;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => showHoverCard(codeEl), 320);
+  });
+  list.addEventListener('mouseout', (e) => {
+    if (e.target.closest('.card-code')) {
+      clearTimeout(hoverTimer);
+      hoverCardEl.style.display = 'none';
+    }
+  });
+  list.addEventListener('scroll', () => { hoverCardEl.style.display = 'none'; }, true);
+}
+
+function showHoverCard(codeEl) {
+  const code = codeEl.innerText.trim();
+  const m = state.materials.find(x => x.code === code);
+  if (!m) return;
+  const low = isLow(m);
+  hoverCardEl.innerHTML = `
+    <div class="hc-code">${escapeHtml(m.code)}</div>
+    <div class="hc-model">${escapeHtml(m.model)}</div>
+    <div class="hc-row"><span>在库</span><b style="color:${m.quantity === 0 ? 'var(--danger)' : low ? 'var(--warning)' : 'var(--accent)'}">${fmtNum(m.quantity)} ${escapeHtml(m.unit || '个')}</b></div>
+    <div class="hc-row"><span>库位</span><b>${m.location ? '# ' + escapeHtml(m.location) : '待归位'}</b></div>
+    ${m.price > 0 ? `<div class="hc-row"><span>单价</span><b>￥${m.price}</b></div>` : ''}
+    ${m.min_stock > 0 ? `<div class="hc-row"><span>预警线</span><b>${m.min_stock}</b></div>` : ''}
+  `;
+  const r = codeEl.getBoundingClientRect();
+  hoverCardEl.style.display = 'block';
+  const w = hoverCardEl.offsetWidth, h = hoverCardEl.offsetHeight;
+  let x = Math.min(r.left, window.innerWidth - w - 12);
+  let y = r.bottom + 8;
+  if (y + h > window.innerHeight - 8) y = r.top - h - 8;
+  hoverCardEl.style.left = Math.max(8, x) + 'px';
+  hoverCardEl.style.top = Math.max(8, y) + 'px';
+}
+
 // ---------- 初始化 ----------
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
@@ -208,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadLocations(true);
   loadMaterials();
   initLiveSync();
+  initHoverCard();
 });
 
 // ---------- 1. 导航 ----------
@@ -525,12 +574,61 @@ async function renderFindResults(query) {
         🔍 找料引擎：本地无精确匹配，为你解读规格${specBits ? `（${specBits}）` : ''}并匹配库存 ${data.results.length} 款
       </div>`;
 
+    state.materials = data.results;
     listEl.innerHTML = banner + data.results.map(m => renderMaterialCard(m)).join('');
     bindMaterialCardEvents();
     showToast(`找到 ${data.results.length} 款相似库存`, 'info');
   } catch (e) {
     emptyEl.style.display = 'flex';
   }
+}
+
+// ---------- 分类封装图标 ----------
+const _catIconCache = {};
+function categoryIcon(category, extra) {
+  const c = ((category || '') + ' ' + (extra || '')).toUpperCase();
+  if (_catIconCache[c]) return _catIconCache[c];
+  const svg = (inner) => `<svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+  let out;
+  if (/电阻|采样|分流/.test(c)) {
+    out = svg('<path d="M2 12h3l2-5 3 10 3-10 2 5h7"/>');
+  } else if (/电容|MLCC|电解|薄膜|安规|超级/.test(c)) {
+    out = svg('<path d="M2 12h6M16 12h6"/><path d="M8 5v14M16 5v14"/>');
+  } else if (/电感|磁珠/.test(c)) {
+    out = svg('<path d="M2 12h2M20 12h2"/><path d="M4 12a3 3 0 016 0 3 3 0 016 0 3 3 0 016 0" transform="translate(-2 0)"/>');
+  } else if (/晶振|谐振/.test(c)) {
+    out = svg('<rect x="8" y="6" width="8" height="12" rx="1"/><path d="M4 9v6M20 9v6"/>');
+  } else if (/MOS|三极管|场效应|晶体管/.test(c)) {
+    out = svg('<circle cx="12" cy="12" r="8"/><path d="M9 8v8M9 12h6M15 10v4M12 4v2M12 18v2"/>');
+  } else if (/二极管|肖特基|整流|TVS|ESD/.test(c)) {
+    out = svg('<path d="M2 12h4M18 12h4"/><path d="M6 6l12 6-12 6z" fill="currentColor" stroke="none"/><path d="M18 6v12"/>');
+  } else if (/LED|发光|灯珠|灯/.test(c)) {
+    out = svg('<path d="M6 6l12 6-12 6z" fill="currentColor" stroke="none"/><path d="M18 6v12M2 12h4"/><path d="M15 4l3-2M17 7l3-2" stroke-width="1.4"/>');
+  } else if (/屏幕|OLED|显示|TFT/.test(c)) {
+    out = svg('<rect x="4" y="5" width="16" height="12" rx="1"/><path d="M8 20h8M12 17v3"/>');
+  } else if (/芯片|主控|驱动|存储|逻辑|IO扩展|稳压|电源管理|单片机|开发板|模组|放大|ADC|运放/.test(c)) {
+    out = svg('<rect x="7" y="7" width="10" height="10" rx="1"/><path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3"/>');
+  } else if (/连接器|排针|排母|接插件|针座|航空|端子|USB|Type-C|网口|RJ|卡座|座子/.test(c)) {
+    out = svg('<path d="M4 9h16M4 15h16"/><path d="M7 9V6M11 9V6M15 9V6M19 9V6M7 18v-3M11 18v-3M15 18v-3M19 18v-3"/>');
+  } else if (/按键|开关|拨码|行程|微动/.test(c)) {
+    out = svg('<path d="M4 18h16"/><path d="M8 18v-6a4 4 0 018 0v6"/><circle cx="12" cy="7" r="1.6" fill="currentColor" stroke="none"/>');
+  } else if (/传感器|温湿|气压|霍尔|测温|光照|雷达|称重/.test(c)) {
+    out = svg('<circle cx="12" cy="12" r="2"/><path d="M12 5a7 7 0 017 7M12 5a7 7 0 00-7 7"/><path d="M12 8a4 4 0 014 4M12 8a4 4 0 00-4 4"/>');
+  } else if (/电源|稳压|隔离|DC-DC|LDO|降压|升压/.test(c)) {
+    out = svg('<path d="M13 2L5 13h6l-1 9 8-11h-6z" fill="currentColor" stroke="none"/>');
+  } else if (/保险|自恢复|保护/.test(c)) {
+    out = svg('<rect x="6" y="8" width="12" height="8" rx="2"/><path d="M2 12h4M18 12h4"/><path d="M9 12l2-2 2 2 2-2"/>');
+  } else if (/磁环|滤波|抗干扰|屏蔽/.test(c)) {
+    out = svg('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3"/>');
+  } else if (/天线|射频|490|LoRa|无线|通信/.test(c)) {
+    out = svg('<path d="M12 14v7"/><circle cx="12" cy="11" r="1.6" fill="currentColor" stroke="none"/><path d="M7.5 7.5a6.4 6.4 0 019 0M5 5a10 10 0 0114 0"/>');
+  } else if (/镊子|钳|螺柱|五金|工具/.test(c)) {
+    out = svg('<path d="M6 20L16 6l3 2L9 21z"/><path d="M16 6l2-3 3 2-2 3"/>');
+  } else {
+    out = svg('<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M5 10h14M10 5v14"/>');
+  }
+  _catIconCache[c] = out;
+  return out;
 }
 
 function isLow(it) {
@@ -562,7 +660,7 @@ function renderMaterialCard(it) {
       <div class="card-meta">
         ${it.brand ? `<span class="meta-tag">${escapeHtml(it.brand)}</span>` : ''}
         ${it.package && it.package !== '-' ? `<span class="meta-tag font-mono">${escapeHtml(it.package)}</span>` : ''}
-        <span class="meta-tag">${escapeHtml(it.category)}</span>
+        <span class="meta-tag cat-tag">${categoryIcon(it.category)}${escapeHtml(it.category)}</span>
         ${it.price > 0 ? `<span class="meta-tag price">￥${it.price}</span>` : ''}
       </div>
       ${it.use_case ? `<div class="card-use">${escapeHtml(it.use_case)}</div>` : ''}
@@ -1787,7 +1885,7 @@ async function openDetailModal(code) {
     $('detail-meta').innerHTML = `
       ${it.brand ? `<span class="meta-tag">品牌: ${escapeHtml(it.brand)}</span>` : ''}
       ${it.package ? `<span class="meta-tag font-mono">封装: ${escapeHtml(it.package)}</span>` : ''}
-      <span class="meta-tag">分类: ${escapeHtml(it.category)}</span>
+      <span class="meta-tag cat-tag">${categoryIcon(it.category)}分类: ${escapeHtml(it.category)}</span>
       <span class="meta-tag" style="color: var(--primary); font-weight: 600;">在库: ${fmtNum(it.quantity)} ${escapeHtml(it.unit || '个')}</span>
       ${it.min_stock > 0 ? `<span class="meta-tag">预警线: ${it.min_stock}</span>` : ''}
       ${it.price > 0 ? `<span class="meta-tag price">单价: ￥${it.price}</span>` : ''}
@@ -2233,6 +2331,7 @@ function initBom() {
 
   $('btn-bom-export').addEventListener('click', exportBomCsv);
   $('btn-bom-copy-missing').addEventListener('click', copyBomMissing);
+  $('btn-bom-order').addEventListener('click', exportBomOrderExcel);
 }
 
 async function runBomCheck(jsonBody, formData, fileName) {
@@ -2367,6 +2466,34 @@ function bomSummarize(items) {
     }
   });
   return { lines: items.length, ok, insufficient, none, total_cost: Math.round(total_cost * 100) / 100, shortfall_cost: Math.round(shortfall_cost * 100) / 100 };
+}
+
+async function exportBomOrderExcel() {
+  if (!state.bomState.items.length) {
+    showToast('请先完成一次 BOM 核对', 'info');
+    return;
+  }
+  try {
+    const res = await api('/api/bom/order-excel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: state.bomState.items })
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showToast(d.detail || '生成失败', 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `bom采购清单_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast('下单清单已生成（含缺料采购页 + 核对明细页）', 'success');
+  } catch (e) {
+    showToast('生成请求失败', 'error');
+  }
 }
 
 function exportBomCsv() {
