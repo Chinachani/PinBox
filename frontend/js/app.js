@@ -314,12 +314,17 @@ function switchView(viewId) {
 
   const searchContainer = $('search-box-container');
   const catChips = $('cat-chips');
+  const catDropdown = $('cat-dropdown');
   if (viewId === 'view-stock') {
     searchContainer.style.display = 'flex';
     catChips.style.display = 'flex';
+    // 桌面下拉/手机横滑由 CSS 断点决定，清掉内联值即可
+    catDropdown.style.display = '';
   } else {
+    // 分类筛选只属于库存页，其他视图（含桌面下拉）一并隐藏
     searchContainer.style.display = 'none';
     catChips.style.display = 'none';
+    catDropdown.style.display = 'none';
   }
 
   if (viewId !== 'view-scan' && state.isCameraRunning) {
