@@ -93,6 +93,10 @@ jobs:
             --hidden-import "PIL" \
             backend/main.py
 
+      - name: Read Version
+        id: ver
+        run: echo "v=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")" >> "$GITHUB_OUTPUT"
+
       - name: Package Debian (.deb)
         run: |
           mkdir -p deb-pkg/opt/pinbox deb-pkg/usr/bin deb-pkg/usr/share/applications deb-pkg/usr/share/icons/hicolor/192x192/apps deb-pkg/DEBIAN
@@ -118,7 +122,7 @@ jobs:
 
           cat << 'EOF' > deb-pkg/DEBIAN/control
           Package: pinbox
-          Version: 1.0.0
+          Version: ${{ steps.ver.outputs.v }}
           Section: utils
           Priority: optional
           Architecture: amd64
@@ -126,13 +130,13 @@ jobs:
           Description: PinBox - Smart Electronics Inventory & BOM Manager
           EOF
 
-          dpkg-deb --build deb-pkg dist/pinbox_1.0.0_amd64.deb
+          dpkg-deb --build deb-pkg dist/pinbox_${{ steps.ver.outputs.v }}_amd64.deb
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PinBox-Linux-deb
-          path: dist/pinbox_1.0.0_amd64.deb
+          path: dist/pinbox_${{ steps.ver.outputs.v }}_amd64.deb
 
   # =========================================================================
   # 3. 编译 Android 原生单机安装包 (PinBox.apk)
@@ -168,16 +172,20 @@ jobs:
           cd android
           ./gradlew assembleDebug --no-daemon
 
+      - name: Read Version (Android)
+        id: ver
+        run: echo "v=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")" >> "$GITHUB_OUTPUT"
+
       - name: Rename and Prepare APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/PinBox-v1.0.0.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/PinBox-v${{ steps.ver.outputs.v }}.apk
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PinBox-Android-APK
-          path: dist/PinBox-v1.0.0.apk
+          path: dist/PinBox-v${{ steps.ver.outputs.v }}.apk
 
   # =========================================================================
   # 4. 发布 GitHub Release（当推送 v* Tag 或手动触发时）
@@ -276,5 +284,5 @@ jobs:
           generate_release_notes: false
           files: |
             release-assets/PinBox-Windows-x64.zip
-            release-assets/pinbox_1.0.0_amd64.deb
-            release-assets/PinBox-v1.0.0.apk
+            release-assets/pinbox_*_amd64.deb
+            release-assets/PinBox-v*.apk
