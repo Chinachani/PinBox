@@ -666,8 +666,11 @@ function initScanner() {
     // 双引擎：先前端极速识别，失败后回退后端多尺度增强
     let text = null;
     try {
-      const qrScanner = new Html5Qrcode('qr-reader');
-      text = await qrScanner.scanFile(file, true);
+      // 立创包装袋是二维码：构造时限定 QR_CODE，避免先跑一维条形码拖慢识别
+      const qrScanner = new Html5Qrcode('qr-reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE]
+      });
+      text = await qrScanner.scanFile(file, false);
     } catch (err) { /* 继续后端识别 */ }
 
     if (text) {
@@ -771,7 +774,9 @@ async function startCamera() {
   const btn = $('btn-start-camera');
 
   try {
-    state.html5QrCode = new Html5Qrcode('qr-reader');
+    state.html5QrCode = new Html5Qrcode('qr-reader', {
+      formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE]
+    });
     placeholder.style.display = 'none';
     if (laserLine) laserLine.style.display = 'block';
 
@@ -816,23 +821,36 @@ function stopCamera() {
   }
 }
 
+function gotoLocationFilter(locName) {
+  if (!locName) return;
+  showToast(`识别到库位「${locName}」，正在跳转…`, 'info');
+  switchView('view-stock');
+  state.locationFilter = locName;
+  state.searchQuery = '';
+  $('search-input').value = '';
+  state.quickFilter = '';
+  $$('#quick-filters .qfilter').forEach(b => b.classList.toggle('active', b.dataset.filter === ''));
+  state.stockPage = 1;
+  renderLocFilterChip();
+  loadMaterials();
+}
+
 async function handleScanText(rawText) {
   const text = (rawText || '').trim();
   if (!text) return;
 
-  // 库位标签：LOC:<name>
+  // 库位标签：完整 URL 带 ?loc= 参数（打印标签上的二维码内容，手机相机可直接扫）
+  let locMatch = text.match(/[?&]loc=([^&\s]+)/);
+  if (locMatch) {
+    const locName = decodeURIComponent(locMatch[1]);
+    gotoLocationFilter(locName);
+    return;
+  }
+
+  // 库位标签：纯 LOC:<name> 文本（兼容旧标签/手输）
   if (text.toUpperCase().startsWith('LOC:')) {
     const locName = text.slice(4).trim();
-    showToast(`识别到库位标签「${locName}」，正在跳转…`, 'info');
-    switchView('view-stock');
-    state.locationFilter = locName;
-    state.searchQuery = '';
-    $('search-input').value = '';
-    state.quickFilter = '';
-    $$('#quick-filters .qfilter').forEach(b => b.classList.toggle('active', b.dataset.filter === ''));
-    state.stockPage = 1;
-    renderLocFilterChip();
-    loadMaterials();
+    gotoLocationFilter(locName);
     return;
   }
 
@@ -1566,23 +1584,71 @@ async function openDetailModal(code) {
 
 // ---------- 15. 标签打印 ----------
 function qrSvgTag(text) {
+  // 中文必须走 UTF-8 字节模式，否则扫出乱码
+  qrcode.stringToBytesFuncs['UTF-8'];
   const qr = qrcode(0, 'M');
-  qr.addData(text);
+  qr.addData(text, 'Byte');
   qr.make();
   return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
 }
 
-function printLocationLabels(locs) {
-  const labels = locs.map(l => `
-    <div class="label">
-      <div class="label-qr">${qrSvgTag('LOC:' + l.name)}</div>
-      <div class="label-info">
-        <div class="label-name">${escapeHtml(l.name)}</div>
-        <div class="label-sub">${escapeHtml(l.note || '元件收纳盒')}</div>
-        <div class="label-foot">PinBox 引脚仓 · 扫码直达</div>
+// 库位二维码内容：完整 URL（手机相机扫码直接打开 App 并筛选该收纳盒）
+function locQrText(locName) {
+  const base = DataLayer.mode === 'server' && DataLayer.serverUrl
+    ? DataLayer.serverUrl
+    : window.location.origin;
+  return `${base}/?loc=${encodeURIComponent(locName)}`;
+}
+
+async function printLocationLabels(locs) {
+  showToast('正在生成标签（含盒内清单）…', 'info');
+  // 并行拉取每个库位的物料清单，标签上直接印内容预览
+  const withItems = await Promise.all(locs.map(async l => {
+    try {
+      const res = await api(`/api/materials?location=${encodeURIComponent(l.name)}&page_size=5&sort_by=code_asc`);
+      const d = await res.json();
+      return { loc: l, items: d.items || [], total: d.total || 0 };
+    } catch (e) {
+      return { loc: l, items: [], total: 0 };
+    }
+  }));
+
+  // 打印时间戳（说明清单数据时点）
+  const printTs = formatTime(new Date().toLocaleString('sv-SE').replace('T', ' '));
+
+  const labels = withItems.map(({ loc, items, total }) => {
+    const rows = items.length
+      ? items.map(m => {
+          // 每款料标注最近一次出入库时间，久未动的好识别
+          const lastTouched = m.updated_at ? formatTime(m.updated_at) : '';
+          const staleDays = m.updated_at ? Math.floor((Date.now() - new Date(m.updated_at.replace(' ', 'T'))) / 86400000) : null;
+          const staleTag = staleDays !== null && staleDays >= 30 ? `<span class="li-stale">${staleDays}天未动</span>` : '';
+          return `
+          <div class="li-row">
+            <span class="li-code">${escapeHtml(m.code)}</span>
+            <span class="li-model">${escapeHtml((m.model || '').slice(0, 14))}${staleTag}</span>
+            <span class="li-qty">x${m.quantity}</span>
+            <span class="li-time">${lastTouched.slice(5, 10)}</span>
+          </div>`;}).join('') + (total > items.length ? `<div class="li-more">…等共 ${total} 款</div>` : '')
+      : '<div class="li-empty">空盒 · 待归位</div>';
+    return `
+      <div class="label">
+        <div class="label-head">
+          <div class="label-qr">${qrSvgTag(locQrText(loc.name))}</div>
+          <div class="label-head-info">
+            <div class="label-name">${escapeHtml(loc.name)}</div>
+            <div class="label-sub">${escapeHtml(loc.note || '元件收纳盒')}</div>
+            <div class="label-stat">${total} 款 · ${loc.pieces || 0} 件</div>
+          </div>
+        </div>
+        <div class="label-list">
+          <div class="li-title">盒内物料</div>
+          ${rows}
+        </div>
+        <div class="label-foot"><span>PinBox 引脚仓 · 扫码查本盒清单</span><span class="foot-ts">打印于 ${printTs}</span></div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
   openPrintWindow(labels);
 }
 
@@ -1620,36 +1686,55 @@ function openPrintWindow(labelsHtml) {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; padding: 16px; background: #fff; }
-  h2 { font-size: 15px; color: #1f2328; margin-bottom: 10px; }
-  .tip { font-size: 11px; color: #656d76; margin-bottom: 12px; }
-  .labels { display: flex; flex-wrap: wrap; gap: 10px; }
+  h2 { font-size: 15px; color: #1f2328; margin-bottom: 8px; }
+  .tip { font-size: 11px; color: #656d76; margin-bottom: 14px; line-height: 1.5; }
+  .labels { display: grid; grid-template-columns: repeat(auto-fill, 300px); gap: 14px; justify-content: center; }
   .label {
-    width: 240px;
-    border: 1.5px solid #d0d7de;
-    border-radius: 8px;
-    padding: 12px;
-    display: flex;
-    gap: 10px;
-    align-items: center;
+    width: 300px;
+    border: 2px solid #1f2328;
+    border-radius: 10px;
     background: #fff;
     page-break-inside: avoid;
+    overflow: hidden;
   }
-  .label .label-qr { width: 84px; height: 84px; flex-shrink: 0; }
-  .label .label-qr svg { width: 84px; height: 84px; display: block; }
-  .label-info { min-width: 0; }
-  .label-name { font-family: ui-monospace, Menlo, monospace; font-size: 16px; font-weight: 800; color: #1f2328; word-break: break-all; }
-  .label-sub { font-size: 11px; color: #1f2328; margin-top: 3px; line-height: 1.35; }
-  .label-foot { font-size: 10px; color: #656d76; margin-top: 5px; }
+  .label-head {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 14px 10px;
+    border-bottom: 1.5px dashed #c9d1d9;
+  }
+  .label .label-qr { width: 88px; height: 88px; flex-shrink: 0; }
+  .label .label-qr svg { width: 88px; height: 88px; display: block; }
+  .label-head-info { min-width: 0; }
+  .label-name { font-family: ui-monospace, Menlo, monospace; font-size: 20px; font-weight: 800; color: #1f2328; word-break: break-all; line-height: 1.2; }
+  .label-sub { font-size: 12px; color: #57606a; margin-top: 4px; }
+  .label-stat { font-size: 12px; font-weight: 700; color: #0969da; margin-top: 6px; font-family: ui-monospace, Menlo, monospace; }
+  .label-list { padding: 8px 14px 10px; }
+  .li-title { font-size: 10px; font-weight: 700; color: #8c959f; letter-spacing: 1px; margin-bottom: 4px; }
+  .li-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; border-bottom: 1px solid #f0f2f4; }
+  .li-row:last-of-type { border-bottom: none; }
+  .li-code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; font-weight: 700; color: #0969da; flex-shrink: 0; }
+  .li-model { font-size: 11px; color: #1f2328; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .li-qty { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #57606a; flex-shrink: 0; }
+  .li-more { font-size: 10px; color: #8c959f; padding-top: 3px; }
+  .li-empty { font-size: 11px; color: #9a6700; padding: 2px 0 4px; }
+  .li-time { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #8c959f; flex-shrink: 0; }
+  .li-stale { font-size: 9px; font-weight: 700; color: #9a6700; background: #fff8c5; border-radius: 3px; padding: 0 3px; margin-left: 4px; }
+  .label-foot { display: flex; justify-content: space-between; align-items: center; }
+  .foot-ts { font-family: ui-monospace, Menlo, monospace; }
+  .label-foot { padding: 6px 14px; background: #f6f8fa; border-top: 1.5px solid #1f2328; font-size: 10px; color: #656d76; }
   @media print {
     body { padding: 0; }
     h2, .tip { display: none; }
-    .label { border-style: solid; }
+    .labels { gap: 10px; }
+    .label { border-radius: 6px; }
   }
 </style>
 </head>
 <body>
   <h2>PinBox 引脚仓 · 标签打印</h2>
-  <div class="tip">物料标签扫码即调出物料；库位标签（LOC: 前缀）扫码直达库位筛选。</div>
+  <div class="tip">物料标签扫码即调出物料；库位标签为「打开本系统的链接」，手机相机扫码直达该收纳盒清单。</div>
   <div class="labels">${labelsHtml}</div>
 </body>
 </html>`);
