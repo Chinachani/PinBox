@@ -10,8 +10,20 @@ function isStandaloneApp() {
     || window.navigator.standalone === true;   // iOS Safari 添加到主屏
 }
 
+// 同步地址解析：
+//   - 浏览器 PWA（https 页面）禁止请求 http 接口 → 自动升级为 https 并换 8089 口
+//   - Capacitor 原生壳按原样使用（已开启 cleartext，走 http 8088）
+function resolveSyncBase(raw) {
+  let url = (raw || '').trim().replace(/\/+$/, '');
+  if (!url) return '';
+  if (window.location.protocol === 'https:' && url.startsWith('http://')) {
+    url = 'https://' + url.slice(7).replace(':8088', ':8089');
+  }
+  return url;
+}
+
 // 与 package.json 同步的版本号（发版时一起改）
-const APP_VERSION = '1.0.9';
+const APP_VERSION = '1.0.10';
 // 用户自己的服务器（独立端首次使用时预置，免手填）
 const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
 
@@ -55,27 +67,27 @@ async function api(path, opts = {}) {
 // ---------- 同步功能 ----------
 
 async function syncTestConnection() {
-  const base = DataLayer.serverUrl;
+  const base = resolveSyncBase(DataLayer.serverUrl);
   if (!base) return { ok: false, msg: '请先填写服务器地址' };
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 4000);
+  const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
     const res = await fetch(base + '/api/stats', { signal: ctrl.signal });
     clearTimeout(timer);
     if (res.ok) {
       const d = await res.json();
-      return { ok: true, msg: `连接成功：${d.total_sku} 款物料 / ${d.total_pieces} 件` };
+      return { ok: true, msg: `连接成功（${base.replace(/^https?:\/\//, '')}）：${d.total_sku} 款物料 / ${d.total_pieces} 件` };
     }
     return { ok: false, msg: `服务器响应异常 (HTTP ${res.status})` };
   } catch (e) {
     clearTimeout(timer);
-    return { ok: false, msg: '连接失败：服务器不可达（检查地址与同一局域网）' };
+    return { ok: false, msg: '连接失败：请确认手机连的是家里 WiFi（4G 访问不到局域网地址）；App 端请使用 http://…:8088 端口' };
   }
 }
 
 // 把本地离线操作推送到服务器
 async function syncPushOps() {
-  const base = DataLayer.serverUrl;
+  const base = resolveSyncBase(DataLayer.serverUrl);
   if (!base) return { ok: false, msg: '请先填写服务器地址' };
   const ops = await LocalDB.getAll('pending_ops');
   if (!ops.length) return { ok: true, msg: '没有待推送的离线变更', pushed: 0 };
@@ -163,7 +175,7 @@ async function syncPushOps() {
 
 // 从服务器拉取全量快照覆盖本地
 async function syncPullSnapshot() {
-  const base = DataLayer.serverUrl;
+  const base = resolveSyncBase(DataLayer.serverUrl);
   if (!base) return { ok: false, msg: '请先填写服务器地址' };
   try {
     const res = await fetch(base + '/api/backup');
@@ -173,7 +185,7 @@ async function syncPullSnapshot() {
     await LocalAPI.restoreSnapshot(data);
     return { ok: true, msg: `拉取成功：${data.materials.length} 款物料 / ${(data.locations || []).length} 个库位 / ${(data.stock_logs || []).length} 条流水` };
   } catch (e) {
-    return { ok: false, msg: '拉取失败：服务器不可达' };
+    return { ok: false, msg: '拉取失败：确认手机连的是家里 WiFi，且 App 端使用 http://…:8088 端口' };
   }
 }
 

@@ -3,6 +3,7 @@
   "appName": "PinBox 引脚仓",
   "webDir": "frontend",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "cleartext": true
   }
 }
