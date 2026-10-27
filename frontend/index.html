@@ -208,9 +208,6 @@
             <div style="flex:1;"></div>
             <button class="btn-action btn-secondary btn-sm" id="btn-batch-finish">结束本次</button>
           </div>
-          <!-- 连续模式逐笔记录（新记录插到最上面，不覆盖） -->
-          <div class="batch-records" id="batch-records" style="display: none;"></div>
-
           <!-- 扫码结果：库中已有 -->
             <div class="scan-result-card" id="scan-result-card">
               <div class="scan-result-top">
@@ -254,6 +251,9 @@
               </button>
             </div>
           </div>
+
+          <!-- 连续模式逐笔记录（保留出入库信息卡片，记录在下方追加） -->
+          <div class="batch-records" id="batch-records" style="display: none;"></div>
 
           <!-- 桌面端侧栏：扫码指南 + 会话扫码记录 -->
           <aside class="scan-side">

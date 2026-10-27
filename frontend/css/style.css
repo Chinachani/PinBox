@@ -2612,3 +2612,62 @@ input[type="number"] {
 #qr-reader__scan_region {
   display: none !important;
 }
+
+/* 连续扫码逐笔记录列表 */
+.batch-records {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.batch-record-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  animation: viewIn 0.18s ease;
+}
+
+.batch-record-item.out { border-left-color: var(--danger); }
+.batch-record-item.fail { border-left-color: var(--warning); }
+
+.bri-code {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.bri-model {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--surface-foreground);
+}
+
+.bri-delta {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.bri-delta.in { color: var(--accent); }
+.bri-delta.out { color: var(--danger); }
+.bri-delta.fail { color: var(--warning); }
+.bri-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
