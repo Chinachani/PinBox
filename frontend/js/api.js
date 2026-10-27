@@ -34,26 +34,53 @@ async function nativeRequest(method, url, bodyObj) {
   return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => data };
 }
 
+// 局域网/本机地址判定：这类地址的服务器是自签证书，原生层 TLS 校验必失败
+function isPrivateHost(h) {
+  return /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || h === 'localhost' || h === '127.0.0.1';
+}
+
+// 原生壳（APK）专用地址规整：局域网 https（自签证书）会被系统 TLS 拒绝
+// （CertPathValidatorException），一律改回 http 直连；无端口/8089/443 → 8088。
+// 公网地址可能是正式证书，不动。
+function normalizeNativeUrl(raw) {
+  let url = (raw || '').trim().replace(/\/+$/, '');
+  if (!url || !isNativeHttpAvailable()) return url;
+  if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+  try {
+    const u = new URL(url);
+    if (!isPrivateHost(u.hostname)) return url;
+    if (u.protocol === 'https:') u.protocol = 'http:';
+    if (!u.port || u.port === '443' || u.port === '8089') u.port = '8088';
+    return u.toString().replace(/\/+$/, '');
+  } catch (e) { return url; }
+}
+
 // 同步地址解析：
 //   - 浏览器 PWA（https 页面）禁止请求 http 接口 → 自动升级为 https 并换 8089 口
-//   - Capacitor 原生壳按原样使用（已开启 cleartext，走 http 8088）
+//   - Capacitor 原生壳 → normalizeNativeUrl 规整为 http 直连
 function resolveSyncBase(raw) {
   let url = (raw || '').trim().replace(/\/+$/, '');
   if (!url) return '';
   if (window.location.protocol === 'https:' && url.startsWith('http://')) {
     url = 'https://' + url.slice(7).replace(':8088', ':8089');
   }
-  return url;
+  return normalizeNativeUrl(url);
 }
 
 // 与 package.json 同步的版本号（发版时一起改）
-const APP_VERSION = '1.0.12';
+const APP_VERSION = '1.0.13';
 // 用户自己的服务器（独立端首次使用时预置，免手填）
 const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
 
 // 独立端首次启动：预置服务器地址，让「拉取/推送」开箱即用
 if (isStandaloneApp() && !localStorage.getItem('wms-server-url')) {
   localStorage.setItem('wms-server-url', DEFAULT_SERVER_URL);
+}
+// 老版本遗留修复：之前手动存过的局域网 https 地址在原生壳里过不了自签证书校验，启动时自动改回 http
+if (isStandaloneApp() && isNativeHttpAvailable() && localStorage.getItem('wms-server-url')) {
+  const _saved = localStorage.getItem('wms-server-url') || '';
+  const _fixed = normalizeNativeUrl(_saved);
+  if (_fixed && _fixed !== _saved) localStorage.setItem('wms-server-url', _fixed);
 }
 
 const DataLayer = {
@@ -93,25 +120,49 @@ async function api(path, opts = {}) {
 async function syncTestConnection() {
   const base = resolveSyncBase(DataLayer.serverUrl);
   if (!base) return { ok: false, msg: '请先填写服务器地址' };
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);
-  try {
-    let res;
-    if (isNativeHttpAvailable()) {
-      res = await nativeRequest('GET', base + '/api/stats');
-    } else {
-      res = await fetch(base + '/api/stats', { signal: ctrl.signal });
+
+  const attempt = async (b) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      let res;
+      if (isNativeHttpAvailable()) {
+        res = await nativeRequest('GET', b + '/api/stats');
+      } else {
+        res = await fetch(b + '/api/stats', { signal: ctrl.signal });
+      }
+      clearTimeout(timer);
+      if (res.ok) {
+        const d = await res.json();
+        return { ok: true, msg: `连接成功（${b.replace(/^https?:\/\//, '')}）：${d.total_sku} 款物料 / ${d.total_pieces} 件` };
+      }
+      return { ok: false, msg: `服务器响应异常 (HTTP ${res.status})` };
+    } catch (e) {
+      clearTimeout(timer);
+      const m = e.message || '网络不可达';
+      return { ok: false, msg: '连接失败：' + m, certError: /Trust anchor|CertPathValidator|SSL|certificate/i.test(m) };
     }
-    clearTimeout(timer);
-    if (res.ok) {
-      const d = await res.json();
-      return { ok: true, msg: `连接成功（${base.replace(/^https?:\/\//, '')}）：${d.total_sku} 款物料 / ${d.total_pieces} 件` };
-    }
-    return { ok: false, msg: `服务器响应异常 (HTTP ${res.status})` };
-  } catch (e) {
-    clearTimeout(timer);
-    return { ok: false, msg: '连接失败：' + (e.message || '网络不可达') + '。请确认手机连的是家里 WiFi（4G 访问不到局域网地址）' };
+  };
+
+  const r = await attempt(base);
+  if (r.ok) return r;
+
+  // 自签证书被系统拒绝（用户存过 https 地址）：自动换 http:8088 重试，成功则顺手修正保存的地址
+  if (r.certError) {
+    try {
+      const u = new URL(/^https?:\/\//i.test(DataLayer.serverUrl) ? DataLayer.serverUrl : 'http://' + DataLayer.serverUrl);
+      const httpBase = `http://${u.hostname}:8088`;
+      const r2 = await attempt(httpBase);
+      if (r2.ok) {
+        DataLayer.setServerUrl(httpBase);
+        r2.msg = 'HTTPS 证书不受信任（自签名），已自动改用 ' + httpBase.replace(/^https?:\/\//, '') + ' —— ' + r2.msg;
+      } else {
+        r2.msg = 'HTTPS 证书不受信任（自签名），改用 ' + httpBase.replace(/^https?:\/\//, '') + ' 也未连通 —— ' + r2.msg + '。请确认手机连的是家里 WiFi（4G 访问不到局域网地址）';
+      }
+      return r2;
+    } catch (e) { /* 落到下面的通用提示 */ }
   }
+  return { ok: false, msg: r.msg + '。请确认手机连的是家里 WiFi（4G 访问不到局域网地址）' };
 }
 
 // 把本地离线操作推送到服务器
@@ -214,7 +265,7 @@ async function syncPushOps() {
         break; // 网络/服务器异常时保留剩余操作，下次再推
       }
     } catch (e) {
-      failed++; failMsg = '网络错误';
+      failed++; failMsg = '网络错误：' + (e.message || '不可达');
       break;
     }
   }
@@ -240,7 +291,7 @@ async function syncPullSnapshot() {
     await LocalAPI.restoreSnapshot(data);
     return { ok: true, msg: `拉取成功：${data.materials.length} 款物料 / ${(data.locations || []).length} 个库位 / ${(data.stock_logs || []).length} 条流水` };
   } catch (e) {
-    return { ok: false, msg: '拉取失败：确认手机连的是家里 WiFi，且 App 端使用 http://…:8088 端口' };
+    return { ok: false, msg: '拉取失败：' + (e.message || '网络不可达') + '。请确认手机连的是家里 WiFi，且地址为 http://…:8088' };
   }
 }
 
