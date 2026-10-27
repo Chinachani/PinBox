@@ -552,7 +552,7 @@ def get_locations():
     return result
 
 @app.post("/api/locations")
-def create_location(data: LocationCreate):
+async def create_location(data: LocationCreate):
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="库位名称不能为空")
@@ -567,10 +567,11 @@ def create_location(data: LocationCreate):
     conn.commit()
     new_id = c.execute("SELECT id FROM locations WHERE name = ?", (name,)).fetchone()[0]
     conn.close()
+    await notify_change("location_create", "", {"name": name})
     return {"message": "库位创建成功", "id": new_id, "name": name}
 
 @app.put("/api/locations/{loc_id}")
-def update_location(loc_id: int, data: LocationUpdate):
+async def update_location(loc_id: int, data: LocationUpdate):
     conn = get_db_connection()
     c = conn.cursor()
     row = c.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
@@ -602,10 +603,11 @@ def update_location(loc_id: int, data: LocationUpdate):
 
     conn.commit()
     conn.close()
+    await notify_change("location_update", "", {"id": loc_id})
     return {"message": "库位已更新"}
 
 @app.delete("/api/locations/{loc_id}")
-def delete_location(loc_id: int, force: bool = False):
+async def delete_location(loc_id: int, force: bool = False):
     conn = get_db_connection()
     c = conn.cursor()
     row = c.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
@@ -622,6 +624,7 @@ def delete_location(loc_id: int, force: bool = False):
     c.execute("DELETE FROM locations WHERE id = ?", (loc_id,))
     conn.commit()
     conn.close()
+    await notify_change("location_delete", "", {"id": loc_id, "name": row["name"]})
     return {"message": f"库位 {row['name']} 已删除", "cleared_materials": used}
 
 @app.post("/api/batch-location")
@@ -721,6 +724,7 @@ async def import_file(file: UploadFile = File(...)):
 
     conn.commit()
     conn.close()
+    await notify_change("import", "", {"file": file.filename})
     return {
         "message": "导入完成",
         "total_parsed": len(records),
@@ -835,6 +839,7 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = Query(""))
 
     conn.commit()
     conn.close()
+    await notify_change("restore", "")
     return {"message": "恢复完成", "materials": mat_count, "logs": log_count, "locations": loc_count}
 
 @app.get("/api/logs")

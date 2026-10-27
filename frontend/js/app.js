@@ -1493,6 +1493,19 @@ function initModals() {
   initBom();
   initToolPanels();
 
+  // 库位页工具栏：事件委托兜底（renderLocationGrid 重渲染间隙 onclick 为空也不怕）
+  $('btn-create-location').addEventListener('click', () => {
+    // renderLocationGrid 的 onclick 正常时它自己会触发；这里仅兜底
+    setTimeout(() => {
+      if (!document.getElementById('loc-manage-modal').classList.contains('show')
+          && !document.getElementById('location-modal').classList.contains('show')
+          && typeof state.editingLoc === 'undefined' || state.editingLoc === null) {
+        // 若 onclick 未生效（网格未渲染），直接打开
+        if (!$('btn-create-location').onclick) openLocManageModal(null);
+      }
+    }, 0);
+  });
+
   // 流水类型 / 时间筛选
   $$('#logs-type-chips .qfilter').forEach(btn => {
     btn.addEventListener('click', () => {
