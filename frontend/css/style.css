@@ -114,6 +114,9 @@ body {
   color: var(--surface-foreground);
   line-height: 1.5;
   min-height: 100vh;
+  /* 禁止页面横向滚动：clip 不创建滚动容器，position:sticky 不受影响。
+     根因防护：任何超宽元素都不再撑破页面自适应 */
+  overflow-x: clip;
   -webkit-font-smoothing: antialiased;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
@@ -278,12 +281,14 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;   /* 允许在窄屏中收缩，防止统计胶囊撑破头部 */
 }
 
 .brand-title {
@@ -311,14 +316,31 @@ body {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  min-width: 0;      /* 数据量大时收缩 */
+  max-width: 100%;
 }
 
 .quick-stats .dot {
   width: 6px;
   height: 6px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--accent);
   animation: pulse 2.4s ease-in-out infinite;
+}
+
+/* 统计文字超宽时省略号截断，不撑破顶栏 */
+.quick-stats #header-stat-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 手机端顶栏只显示款数，电脑端显示完整统计（款数·件数·总价值） */
+.stat-d { display: none; }
+@media (min-width: 768px) {
+  .stat-m { display: none; }
+  .stat-d { display: inline; }
 }
 
 @keyframes pulse {

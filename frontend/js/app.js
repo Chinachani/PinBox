@@ -361,7 +361,10 @@ async function loadStats() {
     const summaryText = `${fmtNum(data.total_sku)} 款 · ${fmtNum(data.total_pieces)} 件${valText}`;
     const modeTag = DataLayer.mode === 'local' ? ' · 本地离线' : '';
     const headerStat = $('header-stat-text');
-    if (headerStat) headerStat.innerText = summaryText + modeTag;
+    // 手机端只显示款数（避免顶栏超宽），电脑端显示完整统计；由 CSS 按断点切换
+    if (headerStat) headerStat.innerHTML =
+      `<span class="stat-m">共 ${fmtNum(data.total_sku)} 款${DataLayer.mode === 'local' ? ' · 离线' : ''}</span>` +
+      `<span class="stat-d">${summaryText}${modeTag}</span>`;
     const netDot = document.querySelector('#header-stat .dot');
     if (netDot) netDot.style.background = DataLayer.mode === 'local' ? 'var(--warning)' : 'var(--accent)';
     const netState = $('sidebar-net-state');

@@ -225,22 +225,10 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            # 取最近一个 release 的 tag，patch 位 +1（无 release 则用 package.json 版本）
-            LAST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
-            if [ -z "$LAST" ]; then
-              LAST=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
-            fi
-            MAJOR=$(echo "$LAST" | cut -d. -f1)
-            MINOR=$(echo "$LAST" | cut -d. -f2)
-            PATCH=$(echo "$LAST" | cut -d. -f3)
-            TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-            # 防 tag 已存在（并发/手动 tag）
-            N=1
-            while git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; do
-              TAG="v${MAJOR}.${MINOR}.$((PATCH + 1 + N))"
-              N=$((N + 1))
-            done
-            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            # Release 版本号与产品版本号（package.json）严格同步，不再自动 +1。
+            # 发版前先 bump package.json；同版本重复推送时 action-gh-release 会原地更新 Release 资产。
+            VER=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
+            echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate Changelog from Commits

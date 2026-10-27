@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pinbox-wms-v33';
+const CACHE_NAME = 'pinbox-wms-v35';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
