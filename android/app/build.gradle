@@ -19,7 +19,7 @@ android {
     signingConfigs {
         release {
             // 固定签名：保证 CI 构建的 APK 可直接覆盖安装（签名一致）
-            storeFile file('../../pinbox-release.keystore')
+            storeFile file('../pinbox-release.keystore')
             storePassword 'pinbox2026'
             keyAlias 'pinbox'
             keyPassword 'pinbox2026'
