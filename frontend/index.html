@@ -220,6 +220,7 @@
                 <span class="meta-tag" id="res-pkg">封装</span>
                 <span class="meta-tag" id="res-cat">分类</span>
               </div>
+              <div class="res-hint" id="res-hint" style="display:none;"></div>
               <div class="scan-result-actions">
                 <div class="res-qty-box">
                   <span style="font-size: 11px; color: var(--muted);">现存</span>
@@ -783,6 +784,12 @@ C25703 5 ..."></textarea>
         <button class="btn-action btn-danger" id="btn-confirm-ok" style="flex: 1;">确认</button>
       </div>
     </div>
+  </div>
+
+  <div class="undo-bar" id="undo-bar" style="display: none;">
+    <span id="undo-text">已出库</span>
+    <button class="btn-action btn-secondary btn-sm" id="btn-undo">撤销</button>
+    <button class="btn-action btn-secondary btn-sm icon-only" id="btn-undo-close" title="关闭">✕</button>
   </div>
 
   <div class="toast" id="toast">操作成功</div>

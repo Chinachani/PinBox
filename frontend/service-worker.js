@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pinbox-wms-v25';
+const CACHE_NAME = 'pinbox-wms-v27';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -53,7 +53,7 @@ self.addEventListener('fetch', (event) => {
 
   // 静态资源：网络优先，失败回退缓存（保证部署后立即拿到新版本）
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'reload' })   // 绕过 HTTP 缓存，确保新版本立即可见
       .then((response) => {
         if (response && response.ok) {
           const clone = response.clone();

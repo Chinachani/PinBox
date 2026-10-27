@@ -607,6 +607,12 @@ const LocalAPI = (() => {
         const parsed = parseLcscBarcode(d.text || '');
         let material = null;
         if (parsed.code) material = await LocalDB.get('materials', parsed.code) || null;
+        if (material) {
+          const logs = await LocalDB.byIndex('logs', 'material_code', material.code);
+          const lastIn = logs.filter(l => l.delta > 0)
+            .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+          material.last_in = lastIn ? lastIn.created_at : '';
+        }
         return okJson({ decoded: !!d.text, raw_text: d.text || '', parsed, found: !!material, material });
       }
       if (p === '/api/scan-image') {

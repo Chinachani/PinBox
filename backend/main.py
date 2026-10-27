@@ -472,6 +472,11 @@ def build_scan_response(raw_text: str) -> Dict[str, Any]:
         row = c.execute("SELECT * FROM materials WHERE code = ?", (parsed["code"],)).fetchone()
         if row:
             material = dict(row)
+            # 上次入库时间（去重提醒用：让用户知道这是一笔并入）
+            last_in = c.execute(
+                "SELECT created_at FROM stock_logs WHERE material_code = ? AND delta > 0 ORDER BY id DESC LIMIT 1",
+                (parsed["code"],)).fetchone()
+            material["last_in"] = last_in["created_at"] if last_in else ""
     conn.close()
 
     return {
@@ -1226,10 +1231,15 @@ def lcsc_price(code: str):
         "message": "请在打开的立创页面查看实时价格"
     }
 
-# 挂载前端静态资源
+# 挂载前端静态资源（no-cache：每次都回源校验，杜绝 PWA 吃旧版本）
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 if os.path.exists(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    class NoCacheStaticFiles(StaticFiles):
+        def file_response(self, *args, **kwargs):
+            resp = super().file_response(*args, **kwargs)
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return resp
+    app.mount("/", NoCacheStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

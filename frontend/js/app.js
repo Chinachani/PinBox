@@ -622,7 +622,44 @@ function bindMaterialCardEvents() {
 }
 
 // ---------- 6. 库存增减 ----------
+// 读当前库存（用于出库闸门判断），找不到返回 null
+function peekCurrentQty(code) {
+  if (state.currentDetail && state.currentDetail.code === code) return state.currentDetail.quantity;
+  if (state.lastScan && state.lastScan.material && state.lastScan.material.code === code) return state.lastScan.material.quantity;
+  const m = state.materials.find(x => x.code === code);
+  return m ? m.quantity : null;
+}
+
+// 出库撤销条（5 秒内可撤）
+let undoTimer = null;
+let lastUndoOp = null;
+function showUndoBar(code, delta, remaining) {
+  lastUndoOp = { code, delta };
+  const bar = $('undo-bar');
+  if (!bar) return;
+  $('undo-text').innerText = `已出库 ${Math.abs(delta)} 个 · ${code}（现存 ${remaining}）`;
+  bar.style.display = 'flex';
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(hideUndoBar, 5000);
+}
+
+function hideUndoBar() {
+  const bar = $('undo-bar');
+  if (bar) bar.style.display = 'none';
+  clearTimeout(undoTimer);
+}
+
 async function adjustStockQuick(code, delta, opts = {}) {
+  // 出库确认闸门：一次出超过现存一半，弹确认（连续批量模式跳过，数量来自标签本身）
+  if (delta < 0 && !opts.skipGate) {
+    const cur = peekCurrentQty(code);
+    const need = Math.abs(delta);
+    if (cur !== null && need * 2 > cur) {
+      const ok = await showConfirm('出库确认',
+        `即将出库 ${need} 个，超过现存 ${cur} 的一半。\n确定要继续吗？`, '继续出库');
+      if (!ok) return { ok: false, cancelled: true };
+    }
+  }
   try {
     const res = await api(`/api/materials/${code}/stock`, {
       method: 'POST',
@@ -656,7 +693,8 @@ async function adjustStockQuick(code, delta, opts = {}) {
       state.currentDetail.quantity = result.current;
     }
     if (!opts.silent) {
-      showToast(`${code} ${delta > 0 ? '入库' : '出库'} ${Math.abs(delta)}，现存 ${result.current}`, 'success', 1600);
+      if (delta < 0) showUndoBar(code, delta, result.current);
+      else showToast(`${code} 入库 ${Math.abs(delta)}，现存 ${result.current}`, 'success', 1600);
     }
     loadStats();
     return { ok: true, result };
@@ -975,6 +1013,8 @@ function handleScanResultData(data) {
   const newCard = $('scan-new-card');
   foundCard.classList.remove('show');
   newCard.classList.remove('show');
+  const hintEl = $('res-hint');
+  if (hintEl) hintEl.style.display = 'none';
 
   if (data.found && data.material) {
     const it = data.material;
@@ -989,6 +1029,16 @@ function handleScanResultData(data) {
     $('res-cat').innerText = it.category;
     $('res-qty').innerText = it.quantity;
     $('res-unit').innerText = it.unit || '个';
+    const hintEl = $('res-hint');
+    if (hintEl) {
+      if (it.last_in) {
+        const days = Math.floor((Date.now() - new Date(it.last_in.replace(' ', 'T')).getTime()) / 86400000);
+        hintEl.innerText = `上次入库 ${formatTime(it.last_in).slice(5, 10)}${days >= 1 ? `（${days} 天前）` : '（今天）'} · 本次入库为并入`;
+        hintEl.style.display = 'block';
+      } else {
+        hintEl.style.display = 'none';
+      }
+    }
     const customQtyInput = $('res-custom-qty');
     if (customQtyInput) {
       customQtyInput.value = data.parsed && data.parsed.quantity ? data.parsed.quantity : 1;
@@ -1022,7 +1072,8 @@ function handleScanResultData(data) {
 async function autoBatchStock(code, delta, material) {
   const r = await adjustStockQuick(code, delta, {
     reason: delta > 0 ? '连续扫码批量入库' : '连续扫码批量出库',
-    silent: true
+    silent: true,
+    skipGate: true
   });
   const s = state.batchStats;
   if (r.ok) {
@@ -1489,6 +1540,16 @@ function initModals() {
     if (e.key === 'Enter') loadRecentLogs(1);
   });
 
+  // 出库撤销条
+  $('btn-undo').addEventListener('click', () => {
+    if (!lastUndoOp) return;
+    adjustStockQuick(lastUndoOp.code, -lastUndoOp.delta, {
+      reason: '撤销出库', skipGate: true, silent: true
+    });
+    hideUndoBar();
+  });
+  $('btn-undo-close').addEventListener('click', hideUndoBar);
+
   // BOM / 补货 / 项目 / PWA / 备份
   initBom();
   initToolPanels();
@@ -1687,6 +1748,17 @@ async function submitMaterialForm(e) {
       loadLocations(true);
     } else {
       showToast(data.detail || '保存失败', 'error');
+      // 新建档撞号 → 引导直接入库（去重提醒）
+      if (!state.editingMaterialCode && data.detail && data.detail.includes('已存在')) {
+        closeModal('material-modal');
+        const ok = await showConfirm('编号已存在',
+          `${code} 已在库中，无需重复建档。要直接为它入库吗？`, '去入库');
+        if (ok) {
+          switchView('view-scan');
+          $('manual-code-input').value = code;
+          handleScanText(code);
+        }
+      }
     }
   } catch (err) {
     showToast('保存请求失败', 'error');

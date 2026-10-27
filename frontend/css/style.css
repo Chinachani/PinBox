@@ -2672,3 +2672,43 @@ input[type="number"] {
   color: var(--muted);
   flex-shrink: 0;
 }
+
+/* 扫码结果卡：上次入库提示 */
+.res-hint {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+/* 出库撤销条 */
+.undo-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(70px + env(safe-area-inset-bottom) + 10px);
+  background: var(--surface-foreground);
+  color: var(--surface);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  box-shadow: var(--shadow-lg);
+  z-index: 90;
+  animation: viewIn 0.2s ease;
+  max-width: min(92vw, 420px);
+}
+
+.undo-bar .btn-action {
+  border-color: color-mix(in srgb, var(--surface) 40%, transparent);
+  background: transparent;
+  color: var(--surface);
+}
+
+.undo-bar .btn-action:hover {
+  background: color-mix(in srgb, var(--surface) 12%, transparent);
+}
