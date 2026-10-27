@@ -822,8 +822,8 @@ html:not([data-theme]) .icon-moon { display: block; }
 /* 管理页 4 大分栏 Tab 控制系统 */
 .tools-tab-bar {
   display: flex;
+  flex-wrap: wrap;          /* 窄屏换行显示全部 tab，不再裁切 */
   gap: 8px;
-  overflow-x: auto;
   padding: 4px 0 10px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 14px;
@@ -836,7 +836,8 @@ html:not([data-theme]) .icon-moon { display: block; }
 
 .tools-tab-btn {
   flex-shrink: 0;
-  padding: 8px 16px;
+  padding: 7px 12px;
+  font-size: 12.5px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-raised);
