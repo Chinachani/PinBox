@@ -1,5 +1,13 @@
 import os
 import sys
+
+# PyInstaller's Windows GUI bootloader has no console streams; Uvicorn's logger needs them.
+if getattr(sys, "frozen", False):
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 import json
 import sqlite3
 import io

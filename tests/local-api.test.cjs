@@ -133,6 +133,31 @@ test('local BOM supports standard CSV, large quantities, and shared stock alloca
   assert.equal(items[1].shortfall, 2);
 });
 
+test('scanner never truncates invalid label quantities into valid stock amounts', () => {
+  const r = runtime();
+  for (const label of ['1.5个', '-2PCS', 'qty:1e3', 'qty:-2个', '9999999999PCS', '0PCS']) {
+    assert.equal(r.LocalAPI.parseLcscBarcode('C10001 ' + label).quantity, null, label);
+  }
+  assert.equal(r.LocalAPI.parseLcscBarcode('C10001 数量:12个').quantity, 12);
+});
+
+test('BOM ambiguous short models and conflicting packages remain manual candidates', async () => {
+  const r = runtime();
+  await create(r, { model: 'SS34 diode', package: 'SMA' });
+  let items = await r.LocalAPI.matchBomItems([{ model: 'SS34', qty: 1, package: '' }]);
+  assert.equal(items[0].matched_code, null);
+  assert.ok(items[0].candidates.length);
+  await request(r, 'PUT', '/api/materials/C10001', { model: 'SS34' });
+  items = await r.LocalAPI.matchBomItems([{ model: 'SS34', qty: 1, package: 'SMB' }]);
+  assert.equal(items[0].matched_code, null);
+  items = await r.LocalAPI.matchBomItems([{ model: 'SS34', qty: 1, package: 'SMA' }]);
+  assert.equal(items[0].matched_code, 'C10001');
+  await create(r, { code: 'C10002', model: 'SS34', package: 'SMB' });
+  items = await r.LocalAPI.matchBomItems([{ model: 'SS34', qty: 1, package: '' }]);
+  assert.equal(items[0].matched_code, null);
+  assert.equal(items[0].candidates.length, 2);
+});
+
 test('sync keeps a rejected operation and stops before its dependent operations', async () => {
   const r = runtime();
   await create(r);

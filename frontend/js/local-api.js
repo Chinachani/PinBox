@@ -71,19 +71,16 @@ const createLocalAPI = (LocalDB) => {
     m = rawText.match(/(?:pm|model|型号)["']?\s*[:=]\s*["']?([^,;\n}]+)/i);
     if (m) result.model = m[1].trim().replace(/["']$/, '');
 
-    m = rawText.match(/(?:qty|数量|count|pcs|quantity)["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)(?![\d.])/i);
+    m = rawText.match(/(?:^|[^A-Za-z0-9_])(?:qty|数量|count|pcs|quantity)["']?\s*[:=]\s*["']?([^,;\s}"']*)/i);
+    if (!m) m = rawText.match(/(?<![A-Za-z0-9_.+\-])([+\-]?\d[\d.,eE+\-]*)\s*(?:个|颗|支|块|条|套|PCS|只)(?![A-Za-z])/i);
     if (m) {
-      const value = Number(m[1]);
+      const text = m[1].replace(/(?:个|颗|支|块|条|套|PCS|只)$/i, '');
+      const value = /^\d+(?:\.\d+)?$/.test(text) ? Number(text) : 0;
       if (Number.isInteger(value) && value > 0 && value <= 2147483647) result.quantity = value;
     } else {
-      m = rawText.match(/([0-9]+)\s*(?:个|颗|支|块|条|套|PCS|只)(?![A-Za-z])/i);
-      if (m) {
-        result.quantity = parseInt(m[1]);
-      } else {
-        const parts = rawText.split(/[,;|\n]/).map(s => s.trim()).filter(Boolean);
-        if (parts.length >= 2 && parts[0].toUpperCase() === result.code && /^\d{1,7}$/.test(parts[1])) {
-          result.quantity = Number(parts[1]) || null;
-        }
+      const parts = rawText.split(/[,;|\n]/).map(s => s.trim()).filter(Boolean);
+      if (parts.length >= 2 && parts[0].toUpperCase() === result.code && /^\d{1,7}$/.test(parts[1])) {
+        result.quantity = Number(parts[1]) || null;
       }
     }
     return result;
@@ -344,12 +341,19 @@ const createLocalAPI = (LocalDB) => {
           }
         }
       }
+      const modelMatches = inv.filter(m => it.model && norm(m.model) === norm(it.model) &&
+        (!it.package || norm(m.package) === norm(it.package)));
+      for (const m of modelMatches) {
+        cand[m.code] = { code: m.code, model: m.model, brand: m.brand, package: m.package, quantity: m.quantity, price: m.price, score: 0.95 };
+      }
       if (best) {
         cand[best.m.code] = { code: best.m.code, model: best.m.model, brand: best.m.brand, package: best.m.package, quantity: best.m.quantity, price: best.m.price, score: best.score };
       }
       it.candidates = Object.values(cand).sort((a, b) => Number(b.code === best?.m.code) - Number(a.code === best?.m.code) || b.score - a.score).slice(0, 3);
 
-      const chosen = best && ['code', 'exact', 'norm', 'mpn'].includes(best.tier) && (!it.code || it.code === best.m.code)
+      const packageAgrees = !it.package || (best && norm(it.package) === norm(best.m.package));
+      const chosen = best && ['code', 'exact', 'norm'].includes(best.tier) &&
+        (best.tier === 'code' || (packageAgrees && modelMatches.length === 1)) && (!it.code || it.code === best.m.code)
         ? it.candidates.find(c => c.code === best.m.code) : null;
       if (chosen) {
         it.matched_code = chosen.code; it.matched_model = chosen.model;

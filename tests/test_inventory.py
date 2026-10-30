@@ -185,7 +185,7 @@ def test_import_receipt_deduplicates_server_and_multiple_offline_devices(client)
     assert client.get("/api/materials/C10001").json()["quantity"] == 5
 
 
-@pytest.mark.parametrize("text,code,qty", [('pc:C91372, pm:ESD-15, qty:10', 'C91372', 10), ('{"code":"C123","qty":5,"model":"test"}', 'C123', 5), ('C91372 40个', 'C91372', 40), ('C91372,100,20261026', 'C91372', 100), ('C91372,qty:1.5', 'C91372', None)])
+@pytest.mark.parametrize("text,code,qty", [('pc:C91372, pm:ESD-15, qty:10', 'C91372', 10), ('{"code":"C123","qty":5,"model":"test"}', 'C123', 5), ('C91372 40个', 'C91372', 40), ('C91372,100,20261026', 'C91372', 100), ('C91372,qty:1.5', 'C91372', None), ('C91372 1.5个', 'C91372', None), ('C91372 -2PCS', 'C91372', None), ('C91372 qty:1e3', 'C91372', None), ('C91372 qty:-2个', 'C91372', None), ('C91372 9999999999PCS', 'C91372', None), ('C91372 0PCS', 'C91372', None), ('C91372 数量:12个', 'C91372', 12)])
 def test_barcode_formats(text, code, qty):
     result = parse_lcsc_barcode(text)
     assert result["code"] == code
@@ -210,6 +210,21 @@ def test_bom_suggestions_require_confirmation(client):
     item = response.json()["items"][0]
     assert item["candidates"]
     assert item["matched_code"] is None
+
+
+def test_bom_short_models_and_package_conflicts_require_confirmation(client):
+    from bom import match_bom_items
+    create(client, model='SS34 diode', package='SMA')
+    item = match_bom_items([{'model': 'SS34', 'qty': 1, 'package': ''}])[0]
+    assert item['matched_code'] is None
+    assert item['candidates']
+    client.put('/api/materials/C10001', json={'model': 'SS34'})
+    assert match_bom_items([{'model': 'SS34', 'qty': 1, 'package': 'SMB'}])[0]['matched_code'] is None
+    assert match_bom_items([{'model': 'SS34', 'qty': 1, 'package': 'SMA'}])[0]['matched_code'] == 'C10001'
+    create(client, code='C10002', model='SS34', package='SMB')
+    ambiguous = match_bom_items([{'model': 'SS34', 'qty': 1, 'package': ''}])[0]
+    assert ambiguous['matched_code'] is None
+    assert len(ambiguous['candidates']) == 2
 
 
 def test_order_excel_columns_are_aligned(client):
@@ -266,3 +281,22 @@ def test_live_notifications_cross_client_event_loops(client):
                 assert client.post('/api/materials/C10001/stock', json={'delta': -1}).status_code == 200
                 assert first.receive_json()['current'] == 19
                 assert second.receive_json()['current'] == 19
+
+
+def test_windows_gui_bootloader_without_console_can_initialize_logging(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    code = '''
+import runpy, sys
+sys.frozen = True
+sys.stdout = sys.stderr = None
+runpy.run_path('backend/main.py', run_name='pinbox_gui_test')
+import uvicorn
+config = uvicorn.Config('main:app')
+assert sys.stdout is not None and sys.stderr is not None
+'''
+    subprocess.run([sys.executable, '-c', code], cwd=root, check=True, timeout=20,
+                   env={**os.environ, 'PINBOX_DATA_DIR': str(tmp_path)})

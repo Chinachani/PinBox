@@ -20,11 +20,12 @@ def parse_lcsc_barcode(raw_text):
     model = re.search(r'(?:pm|model|型号)["\']?\s*[:=]\s*["\']?([^,;\n}]+)', raw, re.I)
     if model:
         result["model"] = model.group(1).strip().strip('"\'')
-    qty = re.search(r'(?:qty|数量|count|pcs|quantity)["\']?\s*[:=]\s*["\']?(\d+(?:\.\d+)?)(?![\d.])', raw, re.I)
+    qty = re.search(r'(?:^|[^A-Za-z0-9_])(?:qty|数量|count|pcs|quantity)["\']?\s*[:=]\s*["\']?([^,;\s}"\']*)', raw, re.I)
     if not qty:
-        qty = re.search(r'(\d+)\s*(?:个|颗|支|块|条|套|PCS|只)(?![A-Za-z])', raw, re.I)
+        qty = re.search(r'(?<![A-Za-z0-9_.+\-])([+\-]?\d[\d.,eE+\-]*)\s*(?:个|颗|支|块|条|套|PCS|只)(?![A-Za-z])', raw, re.I)
     if qty:
-        value = float(qty.group(1))
+        text = re.sub(r'(?:个|颗|支|块|条|套|PCS|只)$', '', qty.group(1), flags=re.I)
+        value = float(text) if re.fullmatch(r'\d+(?:\.\d+)?', text) else 0.0
         if value.is_integer() and 0 < value <= 2_147_483_647:
             result["quantity"] = int(value)
     elif result["code"]:

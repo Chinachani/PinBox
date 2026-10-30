@@ -480,6 +480,11 @@ def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         cand[m["code"]] = {"code": m["code"], "model": m["model"], "brand": m["brand"],
                                            "package": m["package"], "quantity": m["quantity"],
                                            "price": m["price"], "score": round(score, 2)}
+        model_matches = [m for m in inv if it.get("model") and _norm(m["model"]) == _norm(it["model"]) and
+                         (not it.get("package") or _norm(m["package"]) == _norm(it["package"]))]
+        for m in model_matches:
+            cand[m["code"]] = {"code": m["code"], "model": m["model"], "brand": m["brand"],
+                               "package": m["package"], "quantity": m["quantity"], "price": m["price"], "score": 0.95}
         if best:
             bm = best["m"]
             cand[bm["code"]] = {"code": bm["code"], "model": bm["model"], "brand": bm["brand"],
@@ -489,7 +494,8 @@ def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         it["candidates"] = cl
 
         # Similar specifications are suggestions, not verified electrical substitutes.
-        if best and best["tier"] in ("code", "exact", "norm", "mpn") and (not it.get("code") or best["m"]["code"] == it["code"]):
+        package_agrees = not it.get("package") or (best and _norm(it["package"]) == _norm(best["m"]["package"]))
+        if best and best["tier"] in ("code", "exact", "norm") and (best["tier"] == "code" or (package_agrees and len(model_matches) == 1)) and (not it.get("code") or best["m"]["code"] == it["code"]):
             chosen = next(c for c in cl if c["code"] == best["m"]["code"])
         else:
             chosen = None
