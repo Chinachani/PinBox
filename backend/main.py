@@ -7,17 +7,26 @@ import csv
 import time
 import shutil
 import threading
+import secrets
+import hashlib
+import asyncio
+from contextlib import closing
+from uuid import uuid4
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Response, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ValidationError
 
 # 导入数据库和解析模块
 sys.path.append(os.path.dirname(__file__))
-from database import get_db_connection, init_db, DB_PATH
+from database import get_db_connection, init_db, DB_PATH, APP_DIR, transaction
 from parser import parse_lcsc_barcode, parse_import_records
+from schemas import MaterialCreate, MaterialUpdate, StockChange, LocationCreate, LocationUpdate, Backup, MAX_QUANTITY
+from sync import apply_operation, dataset_id
+from importer import import_records
 import bom as bom_engine
 
 app = FastAPI(title="LCSC Mini WMS", description="嘉立创元器件掌上出入库与库存管理系统")
@@ -27,25 +36,29 @@ app = FastAPI(title="LCSC Mini WMS", description="嘉立创元器件掌上出入
 class ConnectionHub:
     """所有已连接客户端广播池"""
     def __init__(self):
-        self.clients: set = set()
+        self.clients: dict = {}
         self.lock = threading.Lock()
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
         with self.lock:
-            self.clients.add(ws)
+            self.clients[ws] = asyncio.get_running_loop()
 
     def disconnect(self, ws: WebSocket):
         with self.lock:
-            self.clients.discard(ws)
+            self.clients.pop(ws, None)
 
     async def broadcast(self, message: dict):
         dead = []
         with self.lock:
-            targets = list(self.clients)
-        for ws in targets:
+            targets = list(self.clients.items())
+        for ws, loop in targets:
             try:
-                await ws.send_json(message)
+                if loop is asyncio.get_running_loop():
+                    await asyncio.wait_for(ws.send_json(message), timeout=2)
+                else:
+                    future = asyncio.run_coroutine_threadsafe(ws.send_json(message), loop)
+                    await asyncio.wait_for(asyncio.wrap_future(future), timeout=2)
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -65,73 +78,51 @@ async def notify_change(kind: str, code: str = "", extra: dict = None):
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
+    origin = ws.headers.get("origin")
+    allowed = {str(ws.base_url).replace('ws:', 'http:').replace('wss:', 'https:').rstrip('/'), "https://localhost", "http://localhost", "capacitor://localhost"}
+    allowed.update(s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip())
+    if os.environ.get("PINBOX_API_TOKEN") or (origin and origin not in allowed):
+        await ws.close(code=1008)
+        return
     await hub.connect(ws)
     try:
         while True:
             # 客户端只保活，不处理业务消息
             await ws.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         hub.disconnect(ws)
 
 # 允许跨域（方便局域网内任意客户端调用）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["https://localhost", "http://localhost", "capacitor://localhost"] + [s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip()],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def protect_api(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        token = os.environ.get("PINBOX_API_TOKEN", "")
+        if token and request.method != "OPTIONS" and not secrets.compare_digest(request.headers.get("authorization", "").encode(), ("Bearer " + token).encode()):
+            return JSONResponse({"detail": "需要有效的服务器访问令牌"}, status_code=401)
+        origin = request.headers.get("origin")
+        allowed = {str(request.base_url).rstrip("/"), "https://localhost", "http://localhost", "capacitor://localhost"}
+        allowed.update(s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip())
+        if origin and origin not in allowed:
+            return JSONResponse({"detail": "不允许此来源访问服务器"}, status_code=403)
+    return await call_next(request)
 
 # 初始化数据库
 init_db()
 
 # --- Pydantic 模型 ---
-class MaterialCreate(BaseModel):
-    code: str
-    category: str = "未分类"
-    brand: Optional[str] = ""
-    model: str
-    package: Optional[str] = ""
-    quantity: int = 0
-    unit: Optional[str] = "个"
-    price: Optional[float] = 0.0
-    location: Optional[str] = ""
-    use_case: Optional[str] = ""
-    batch: Optional[str] = "手动录入"
-    order_date: Optional[str] = ""
-    min_stock: Optional[int] = 0
-    remark: Optional[str] = ""
-
-class MaterialUpdate(BaseModel):
-    category: Optional[str] = None
-    brand: Optional[str] = None
-    model: Optional[str] = None
-    package: Optional[str] = None
-    quantity: Optional[int] = None
-    unit: Optional[str] = None
-    price: Optional[float] = None
-    location: Optional[str] = None
-    use_case: Optional[str] = None
-    batch: Optional[str] = None
-    order_date: Optional[str] = None
-    min_stock: Optional[int] = None
-    remark: Optional[str] = None
-
-class StockChange(BaseModel):
-    delta: int  # 正数为入库，负数为出库
-    reason: Optional[str] = "手动调整"
-    project: Optional[str] = ""
-
 class ScanRequest(BaseModel):
-    text: str
-
-class LocationCreate(BaseModel):
-    name: str
-    note: Optional[str] = ""
-
-class LocationUpdate(BaseModel):
-    name: Optional[str] = None
-    note: Optional[str] = None
+    text: str = Field(max_length=10000)
 
 class BatchLocation(BaseModel):
     codes: List[str]
@@ -141,6 +132,32 @@ class BatchLocation(BaseModel):
 
 def now_local() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def read_upload(file):
+    content = await file.read(20 * 1024 * 1024 + 1)
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "上传文件不能超过 20 MB")
+    return content
+
+
+@app.post("/api/sync/op")
+async def sync_operation(request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict) or not isinstance(body.get("operation"), dict):
+            raise ValueError("缺少同步操作")
+        result = apply_operation(body["operation"], body.get("dataset_id"))
+    except (ValidationError, ValueError, TypeError) as exc:
+        raise HTTPException(400, f"同步数据无效: {exc}") from exc
+    await notify_change("sync")
+    return result
+
+
+@app.get("/api/sync/state")
+def sync_state():
+    with transaction() as conn:
+        return {"dataset_id": dataset_id(conn)}
 
 # --- API 端点 ---
 
@@ -183,8 +200,8 @@ def list_materials(
     low_stock: Optional[bool] = None,
     zero_stock: Optional[bool] = None,
     sort_by: Optional[str] = "updated_at",
-    page: int = 1,
-    page_size: int = 30,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=1000),
 ):
     conn = get_db_connection()
     c = conn.cursor()
@@ -258,7 +275,7 @@ def get_material(code: str):
     # 获取出入库流水
     logs = c.execute("""
         SELECT * FROM stock_logs WHERE material_code = ?
-        ORDER BY created_at DESC LIMIT 30
+        ORDER BY created_at DESC, id DESC LIMIT 30
     """, (code,)).fetchall()
     material["logs"] = [dict(l) for l in logs]
 
@@ -267,145 +284,128 @@ def get_material(code: str):
 
 @app.post("/api/materials")
 async def create_material(data: MaterialCreate):
-    conn = get_db_connection()
-    c = conn.cursor()
-    code = data.code.strip().upper()
+    with transaction() as conn:
+        c = conn.cursor()
+        code = data.code.strip().upper()
 
-    if not code:
-        conn.close()
-        raise HTTPException(status_code=400, detail="物料编号不能为空")
-    if not data.model.strip():
-        conn.close()
-        raise HTTPException(status_code=400, detail="型号/名称不能为空")
+        if not code:
+            raise HTTPException(status_code=400, detail="物料编号不能为空")
+        if not data.model.strip():
+            raise HTTPException(status_code=400, detail="型号/名称不能为空")
 
-    exists = c.execute("SELECT code FROM materials WHERE code = ?", (code,)).fetchone()
-    if exists:
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"物料编码 {code} 已存在，可直接入库")
+        exists = c.execute("SELECT code FROM materials WHERE code = ?", (code,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=400, detail=f"物料编码 {code} 已存在，可直接入库")
 
-    # 若指定了库位，自动登记为新库位
-    location = (data.location or "").strip()
-    if location:
-        c.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (location,))
+        # 若指定了库位，自动登记为新库位
+        location = (data.location or "").strip()
+        if location:
+            c.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (location,))
 
-    c.execute("""
-        INSERT INTO materials (code, category, brand, model, package, quantity, unit, price, location, use_case, batch, order_date, min_stock, remark)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (code, data.category.strip() or "未分类", data.brand or "", data.model.strip(), data.package or "",
-          data.quantity, data.unit or "个", data.price or 0.0, location, data.use_case or "",
-          data.batch or "手动录入", data.order_date or "", data.min_stock or 0, data.remark or ""))
-
-    if data.quantity > 0:
         c.execute("""
-            INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-            VALUES (?, 'init', ?, ?, '初始建档录入', ?)
-        """, (code, data.quantity, data.quantity, now_local()))
+            INSERT INTO materials (code, category, brand, model, package, quantity, unit, price, location, use_case, batch, order_date, min_stock, remark, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (code, data.category.strip() or "未分类", data.brand or "", data.model.strip(), data.package or "",
+              data.quantity, data.unit or "个", data.price or 0.0, location, data.use_case or "",
+              data.batch or "手动录入", data.order_date or "", data.min_stock or 0, data.remark or "", now_local(), now_local()))
 
-    conn.commit()
-    conn.close()
+        if data.quantity > 0:
+            c.execute("""
+                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
+                VALUES (?, 'init', ?, ?, '初始建档录入', ?)
+            """, (code, data.quantity, data.quantity, now_local()))
+
     await notify_change("create", code)
     return {"message": "创建成功", "code": code}
 
 @app.put("/api/materials/{code}")
 async def update_material(code: str, data: MaterialUpdate):
-    conn = get_db_connection()
-    c = conn.cursor()
-    code = code.strip().upper()
+    with transaction() as conn:
+        c = conn.cursor()
+        code = code.strip().upper()
 
-    row = c.execute("SELECT * FROM materials WHERE code = ?", (code,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="元器件不存在")
+        row = c.execute("SELECT * FROM materials WHERE code = ?", (code,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="元器件不存在")
 
-    old_data = dict(row)
-    update_dict = {k: v for k, v in data.dict().items() if v is not None}
+        old_data = dict(row)
+        update_dict = data.model_dump(exclude_none=True)
 
-    if not update_dict:
-        conn.close()
-        return {"message": "无内容更新"}
+        if not update_dict:
+            return {"message": "无内容更新"}
 
-    # 库位变更时，确保新库位存在于库位表
-    if "location" in update_dict:
-        new_loc = (update_dict["location"] or "").strip()
-        update_dict["location"] = new_loc
-        if new_loc:
-            c.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (new_loc,))
+        # 库位变更时，确保新库位存在于库位表
+        if "location" in update_dict:
+            new_loc = (update_dict["location"] or "").strip()
+            update_dict["location"] = new_loc
+            if new_loc:
+                c.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (new_loc,))
 
-    # 如果直接修改了 quantity，记录调整日志
-    if "quantity" in update_dict and update_dict["quantity"] != old_data["quantity"]:
-        new_q = update_dict["quantity"]
-        delta = new_q - old_data["quantity"]
-        c.execute("""
-            INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-            VALUES (?, 'adjust', ?, ?, '人工直接修正库存', ?)
-        """, (code, delta, new_q, now_local()))
+        # 如果直接修改了 quantity，记录调整日志
+        if "quantity" in update_dict and update_dict["quantity"] != old_data["quantity"]:
+            new_q = update_dict["quantity"]
+            delta = new_q - old_data["quantity"]
+            c.execute("""
+                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
+                VALUES (?, 'adjust', ?, ?, '人工直接修正库存', ?)
+            """, (code, delta, new_q, now_local()))
 
-    set_clause = ", ".join([f"{k} = ?" for k in update_dict.keys()]) + ", updated_at = datetime('now','localtime')"
-    values = list(update_dict.values()) + [code]
+        set_clause = ", ".join([f"{k} = ?" for k in update_dict.keys()]) + ", updated_at = datetime('now','localtime')"
+        values = list(update_dict.values()) + [code]
 
-    c.execute(f"UPDATE materials SET {set_clause} WHERE code = ?", values)
-    conn.commit()
-    conn.close()
+        c.execute(f"UPDATE materials SET {set_clause} WHERE code = ?", values)
     await notify_change("update", code, {"fields": list(update_dict.keys())})
     return {"message": "更新成功"}
 
 @app.delete("/api/materials/{code}")
 async def delete_material(code: str):
-    conn = get_db_connection()
-    c = conn.cursor()
-    code = code.strip().upper()
+    with transaction() as conn:
+        c = conn.cursor()
+        code = code.strip().upper()
 
-    row = c.execute("SELECT code FROM materials WHERE code = ?", (code,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="元器件不存在")
+        row = c.execute("SELECT code FROM materials WHERE code = ?", (code,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="元器件不存在")
 
-    c.execute("DELETE FROM stock_logs WHERE material_code = ?", (code,))
-    c.execute("DELETE FROM materials WHERE code = ?", (code,))
-    conn.commit()
-    conn.close()
+        c.execute("DELETE FROM stock_logs WHERE material_code = ?", (code,))
+        c.execute("DELETE FROM materials WHERE code = ?", (code,))
     await notify_change("delete", code)
     return {"message": f"已删除物料 {code}"}
 
 @app.post("/api/materials/{code}/stock")
 async def change_stock(code: str, change: StockChange):
-    conn = get_db_connection()
-    c = conn.cursor()
-    code = code.strip().upper()
+    with transaction() as conn:
+        c = conn.cursor()
+        code = code.strip().upper()
 
-    row = c.execute("SELECT * FROM materials WHERE code = ?", (code,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="元器件不存在")
+        row = c.execute("SELECT * FROM materials WHERE code = ?", (code,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="元器件不存在")
 
-    current_q = row["quantity"]
-    delta = change.delta
-    if delta == 0:
-        conn.close()
-        raise HTTPException(status_code=400, detail="变动数量不能为 0")
+        current_q = row["quantity"]
+        delta = change.delta
+        if delta == 0:
+            raise HTTPException(status_code=400, detail="变动数量不能为 0")
 
-    # 原子更新：库存不足时 WHERE 条件不成立，rowcount 为 0
-    cur = c.execute("""
-        UPDATE materials
-        SET quantity = quantity + ?, updated_at = datetime('now','localtime')
-        WHERE code = ? AND quantity + ? >= 0
-    """, (delta, code, delta))
-    if cur.rowcount == 0:
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"库存不足，当前仅剩 {current_q} {row['unit']}")
+        # 原子更新：库存不足时 WHERE 条件不成立，rowcount 为 0
+        cur = c.execute("""
+            UPDATE materials
+            SET quantity = quantity + ?, updated_at = datetime('now','localtime')
+            WHERE code = ? AND quantity + ? BETWEEN 0 AND ?
+        """, (delta, code, delta, MAX_QUANTITY))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=400, detail=f"库存不足，当前仅剩 {current_q} {row['unit']}")
 
-    new_q = c.execute("SELECT quantity FROM materials WHERE code = ?", (code,)).fetchone()[0]
-    change_type = "in" if delta > 0 else "out"
-    reason = change.reason or ("快速扫码入库" if delta > 0 else "快速出库领料")
-    project = (change.project or "").strip()
+        new_q = c.execute("SELECT quantity FROM materials WHERE code = ?", (code,)).fetchone()[0]
+        change_type = "in" if delta > 0 else "out"
+        reason = change.reason or ("快速扫码入库" if delta > 0 else "快速出库领料")
+        project = (change.project or "").strip()
 
-    c.execute("""
-        INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, project, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (code, change_type, delta, new_q, reason, project, now_local()))
+        c.execute("""
+            INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, project, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (code, change_type, delta, new_q, reason, project, now_local()))
 
-    conn.commit()
-    conn.close()
     await notify_change("stock", code, {"delta": delta, "current": new_q, "project": project})
     return {"message": "库存变动成功", "code": code, "previous": current_q, "delta": delta, "current": new_q}
 
@@ -415,7 +415,7 @@ async def scan_image(file: UploadFile = File(...)):
     后端极强条码识别引擎：基于 zxing-cpp + 多尺度/多对比度自适应增强
     无论手机拍照模糊、反光、带倾斜均能精准解析
     """
-    content = await file.read()
+    content = await read_upload(file)
     decoded_text = ""
 
     try:
@@ -561,105 +561,91 @@ async def create_location(data: LocationCreate):
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="库位名称不能为空")
-    conn = get_db_connection()
-    c = conn.cursor()
-    exists = c.execute("SELECT id FROM locations WHERE name = ?", (name,)).fetchone()
-    if exists:
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"库位 {name} 已存在")
-    c.execute("INSERT INTO locations (name, note, created_at) VALUES (?, ?, ?)",
-              (name, data.note or "", now_local()))
-    conn.commit()
-    new_id = c.execute("SELECT id FROM locations WHERE name = ?", (name,)).fetchone()[0]
-    conn.close()
+    with transaction() as conn:
+        c = conn.cursor()
+        exists = c.execute("SELECT id FROM locations WHERE name = ?", (name,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=400, detail=f"库位 {name} 已存在")
+        c.execute("INSERT INTO locations (name, note, created_at) VALUES (?, ?, ?)",
+                  (name, data.note or "", now_local()))
+        new_id = c.execute("SELECT id FROM locations WHERE name = ?", (name,)).fetchone()[0]
     await notify_change("location_create", "", {"name": name})
     return {"message": "库位创建成功", "id": new_id, "name": name}
 
 @app.put("/api/locations/{loc_id}")
 async def update_location(loc_id: int, data: LocationUpdate):
-    conn = get_db_connection()
-    c = conn.cursor()
-    row = c.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="库位不存在")
+    with transaction() as conn:
+        c = conn.cursor()
+        row = c.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="库位不存在")
 
-    updates = {}
-    if data.note is not None:
-        updates["note"] = data.note
-    if data.name is not None and data.name.strip() and data.name.strip() != row["name"]:
-        new_name = data.name.strip()
-        dup = c.execute("SELECT id FROM locations WHERE name = ? AND id != ?", (new_name, loc_id)).fetchone()
-        if dup:
-            conn.close()
-            raise HTTPException(status_code=400, detail=f"库位 {new_name} 已存在")
-        updates["name"] = new_name
+        updates = {}
+        if data.note is not None:
+            updates["note"] = data.note
+        if data.name is not None and data.name.strip() and data.name.strip() != row["name"]:
+            new_name = data.name.strip()
+            dup = c.execute("SELECT id FROM locations WHERE name = ? AND id != ?", (new_name, loc_id)).fetchone()
+            if dup:
+                raise HTTPException(status_code=400, detail=f"库位 {new_name} 已存在")
+            updates["name"] = new_name
 
-    if not updates:
-        conn.close()
-        return {"message": "无内容更新"}
+        if not updates:
+            return {"message": "无内容更新"}
 
-    if "name" in updates:
-        c.execute("UPDATE locations SET name = ? WHERE id = ?", (updates["name"], loc_id))
-        c.execute("UPDATE materials SET location = ?, updated_at = datetime('now','localtime') WHERE location = ?",
-                  (updates["name"], row["name"]))
-    if "note" in updates:
-        c.execute("UPDATE locations SET note = ? WHERE id = ?", (updates["note"], loc_id))
+        if "name" in updates:
+            c.execute("UPDATE locations SET name = ? WHERE id = ?", (updates["name"], loc_id))
+            c.execute("UPDATE materials SET location = ?, updated_at = datetime('now','localtime') WHERE location = ?",
+                      (updates["name"], row["name"]))
+        if "note" in updates:
+            c.execute("UPDATE locations SET note = ? WHERE id = ?", (updates["note"], loc_id))
 
-    conn.commit()
-    conn.close()
     await notify_change("location_update", "", {"id": loc_id})
     return {"message": "库位已更新"}
 
 @app.delete("/api/locations/{loc_id}")
 async def delete_location(loc_id: int, force: bool = False):
-    conn = get_db_connection()
-    c = conn.cursor()
-    row = c.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="库位不存在")
+    with transaction() as conn:
+        c = conn.cursor()
+        row = c.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="库位不存在")
 
-    used = c.execute("SELECT COUNT(*) FROM materials WHERE location = ?", (row["name"],)).fetchone()[0]
-    if used > 0 and not force:
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"该库位下仍有 {used} 款物料，请先移走或使用强制删除")
+        used = c.execute("SELECT COUNT(*) FROM materials WHERE location = ?", (row["name"],)).fetchone()[0]
+        if used > 0 and not force:
+            raise HTTPException(status_code=400, detail=f"该库位下仍有 {used} 款物料，请先移走或使用强制删除")
 
-    c.execute("UPDATE materials SET location = '', updated_at = datetime('now','localtime') WHERE location = ?", (row["name"],))
-    c.execute("DELETE FROM locations WHERE id = ?", (loc_id,))
-    conn.commit()
-    conn.close()
+        c.execute("UPDATE materials SET location = '', updated_at = datetime('now','localtime') WHERE location = ?", (row["name"],))
+        c.execute("DELETE FROM locations WHERE id = ?", (loc_id,))
     await notify_change("location_delete", "", {"id": loc_id, "name": row["name"]})
     return {"message": f"库位 {row['name']} 已删除", "cleared_materials": used}
 
 @app.post("/api/batch-location")
 async def batch_assign_location(data: BatchLocation):
-    conn = get_db_connection()
-    c = conn.cursor()
-    loc = (data.location or "").strip()
-    if loc:
-        exists = c.execute("SELECT id FROM locations WHERE name = ?", (loc,)).fetchone()
-        if not exists:
-            c.execute("INSERT INTO locations (name, created_at) VALUES (?, ?)", (loc, now_local()))
+    with transaction() as conn:
+        c = conn.cursor()
+        loc = (data.location or "").strip()
+        if loc:
+            exists = c.execute("SELECT id FROM locations WHERE name = ?", (loc,)).fetchone()
+            if not exists:
+                c.execute("INSERT INTO locations (name, created_at) VALUES (?, ?)", (loc, now_local()))
 
-    updated = 0
-    for raw_code in data.codes:
-        code = (raw_code or "").strip().upper()
-        if not code:
-            continue
-        row = c.execute("SELECT quantity FROM materials WHERE code = ?", (code,)).fetchone()
-        if not row:
-            continue
-        c.execute("UPDATE materials SET location = ?, updated_at = datetime('now','localtime') WHERE code = ?",
-                  (loc, code))
-        c.execute("""
-            INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-            VALUES (?, 'adjust', 0, ?, ?, ?)
-        """, (code, row["quantity"], f"批量归位至「{loc or '未分配'}」", now_local()))
-        updated += 1
+        updated = 0
+        for raw_code in data.codes:
+            code = (raw_code or "").strip().upper()
+            if not code:
+                continue
+            row = c.execute("SELECT quantity FROM materials WHERE code = ?", (code,)).fetchone()
+            if not row:
+                continue
+            c.execute("UPDATE materials SET location = ?, updated_at = datetime('now','localtime') WHERE code = ?",
+                      (loc, code))
+            c.execute("""
+                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
+                VALUES (?, 'adjust', 0, ?, ?, ?)
+            """, (code, row["quantity"], f"批量归位至「{loc or '未分配'}」", now_local()))
+            updated += 1
 
-    conn.commit()
-    conn.close()
     await notify_change("batch_location", "", {"count": updated, "location": loc})
     return {"message": f"已将 {updated} 款物料归位到「{loc or '未分配'}」", "updated": updated}
 
@@ -667,76 +653,20 @@ async def batch_assign_location(data: BatchLocation):
 
 @app.post("/api/import")
 async def import_file(file: UploadFile = File(...)):
-    content = await file.read()
-    records = parse_import_records(content, file.filename)
+    content = await read_upload(file)
+    try:
+        records = parse_import_records(content, file.filename)
+    except Exception as exc:
+        raise HTTPException(400, f"导入文件无效: {exc}") from exc
     if not records:
         raise HTTPException(status_code=400, detail="未在文件中解析出有效的物料数据")
 
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    added_count = 0
-    updated_count = 0
-    skipped = 0
-
-    for r in records:
-        code = (r.get("code") or "").strip().upper()
-        if not code:
-            skipped += 1
-            continue
-        existing = c.execute("SELECT * FROM materials WHERE code = ?", (code,)).fetchone()
-        if existing:
-            # 累加库存并更新批次
-            new_q = existing["quantity"] + (r.get("quantity") or 0)
-            c.execute("""
-                UPDATE materials SET
-                    quantity = ?,
-                    price = CASE WHEN ? > 0 THEN ? ELSE price END,
-                    batch = ?,
-                    updated_at = datetime('now','localtime')
-                WHERE code = ?
-            """, (new_q, r.get("price", 0.0), r.get("price", 0.0), r.get("batch") or existing["batch"] or "", code))
-
-            c.execute("""
-                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-                VALUES (?, 'import', ?, ?, ?, ?)
-            """, (code, r.get("quantity", 0), new_q, f"订单导入累加 ({file.filename})", now_local()))
-            updated_count += 1
-        else:
-            c.execute("""
-                INSERT INTO materials (code, category, brand, model, package, quantity, unit, price, location, use_case, batch, order_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                code,
-                r.get("category", "导入物料"),
-                r.get("brand", ""),
-                r.get("model", ""),
-                r.get("package", ""),
-                r.get("quantity", 0),
-                r.get("unit", "个"),
-                r.get("price", 0.0),
-                "",
-                r.get("use_case", ""),
-                r.get("batch", file.filename),
-                ""
-            ))
-
-            c.execute("""
-                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-                VALUES (?, 'init', ?, ?, ?, ?)
-            """, (code, r.get("quantity", 0), r.get("quantity", 0), f"订单导入初次建档 ({file.filename})", now_local()))
-            added_count += 1
-
-    conn.commit()
-    conn.close()
+    with transaction() as conn:
+        result = import_records(conn, records, hashlib.sha256(content).hexdigest(), file.filename or "import")
+        if result.get("duplicate"):
+            raise HTTPException(409, result["message"])
     await notify_change("import", "", {"file": file.filename})
-    return {
-        "message": "导入完成",
-        "total_parsed": len(records),
-        "newly_added": added_count,
-        "stock_updated": updated_count,
-        "skipped": skipped
-    }
+    return result
 
 @app.get("/api/export")
 def export_data(format: str = "json"):
@@ -748,11 +678,11 @@ def export_data(format: str = "json"):
 
     if format == "csv":
         output = io.StringIO()
-        fieldnames = ["code", "category", "brand", "model", "package", "quantity", "unit", "price", "location", "use_case", "batch", "min_stock", "remark"]
+        fieldnames = ["code", "category", "brand", "model", "package", "quantity", "unit", "price", "location", "use_case", "batch", "order_date", "min_stock", "remark"]
         writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for m in materials:
-            writer.writerow(m)
+            writer.writerow({key: ("'" + value if isinstance(value, str) and value.startswith(('=', '+', '-', '@', '\t', '\r')) else value) for key, value in m.items()})
         return Response(
             content=output.getvalue().encode("utf-8-sig"),
             media_type="text/csv",
@@ -769,6 +699,7 @@ def export_data(format: str = "json"):
 def backup_all():
     """全量备份：物料 + 流水 + 库位"""
     conn = get_db_connection()
+    conn.execute("BEGIN IMMEDIATE")
     c = conn.cursor()
     data = {
         "backup_version": 1,
@@ -776,7 +707,10 @@ def backup_all():
         "materials": [dict(r) for r in c.execute("SELECT * FROM materials").fetchall()],
         "stock_logs": [dict(r) for r in c.execute("SELECT * FROM stock_logs").fetchall()],
         "locations": [dict(r) for r in c.execute("SELECT * FROM locations").fetchall()],
+        "dataset_id": dataset_id(conn),
+        "import_receipts": [dict(r) for r in c.execute("SELECT key,value FROM app_meta WHERE key LIKE 'import:%'").fetchall()],
     }
+    conn.commit()
     conn.close()
     return Response(
         content=json.dumps(data, ensure_ascii=False),
@@ -788,64 +722,68 @@ def backup_all():
 async def restore_backup(file: UploadFile = File(...), confirm: str = Query("")):
     if confirm != "yes":
         raise HTTPException(status_code=400, detail="缺少确认参数，拒绝恢复")
-    content = await file.read()
+    content = await read_upload(file)
     try:
-        data = json.loads(content.decode("utf-8", errors="replace"))
+        raw_data = json.loads(content.decode("utf-8-sig"))
+        validated = Backup.model_validate(raw_data).validate_references()
+        data = validated.model_dump()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"备份文件解析失败: {e}")
 
-    materials = data.get("materials") or []
-    if not materials:
-        raise HTTPException(status_code=400, detail="备份文件中没有物料数据")
+    materials = data["materials"]
 
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM stock_logs")
-    c.execute("DELETE FROM materials")
-    c.execute("DELETE FROM locations")
+    receipts = raw_data.get("import_receipts", [])
+    if not isinstance(receipts, list) or any(not isinstance(r, dict) or not isinstance(r.get("key"), str) or not r["key"].startswith("import:") for r in receipts):
+        raise HTTPException(400, "备份导入凭据无效")
+    backup_name = _run_backup()
+    with transaction() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM stock_logs")
+        c.execute("DELETE FROM materials")
+        c.execute("DELETE FROM locations")
 
-    loc_count = 0
-    for loc in data.get("locations") or []:
-        name = (loc.get("name") or "").strip()
-        if not name:
-            continue
-        c.execute("INSERT OR IGNORE INTO locations (name, note, created_at) VALUES (?, ?, ?)",
-                  (name, loc.get("note", ""), loc.get("created_at") or now_local()))
-        loc_count += 1
+        loc_count = 0
+        for loc in data.get("locations") or []:
+            name = (loc.get("name") or "").strip()
+            if not name:
+                continue
+            c.execute("INSERT INTO locations (id, name, note, created_at) VALUES (?, ?, ?, ?)",
+                      (loc.get("id"), name, loc.get("note", ""), loc.get("created_at") or now_local()))
+            loc_count += 1
 
-    mat_count = 0
-    for m in materials:
-        code = (m.get("code") or "").strip().upper()
-        if not code:
-            continue
-        c.execute("""
-            INSERT INTO materials (code, category, brand, model, package, quantity, unit, price, location, use_case, batch, order_date, min_stock, remark, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (code, m.get("category", "未分类"), m.get("brand", ""), m.get("model", ""), m.get("package", ""),
-              m.get("quantity", 0), m.get("unit", "个"), m.get("price", 0.0), m.get("location", ""),
-              m.get("use_case", ""), m.get("batch", ""), m.get("order_date", ""), m.get("min_stock", 0),
-              m.get("remark", ""), m.get("created_at") or now_local(), m.get("updated_at") or now_local()))
-        mat_count += 1
-
-    log_count = 0
-    for l in data.get("stock_logs") or []:
-        code = (l.get("material_code") or "").strip().upper()
-        if not code:
-            continue
-        try:
+        mat_count = 0
+        for m in materials:
+            code = (m.get("code") or "").strip().upper()
+            if not code:
+                continue
             c.execute("""
-                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (code, l.get("change_type", "init"), l.get("delta", 0), l.get("remaining", 0),
-                  l.get("reason", ""), l.get("created_at") or now_local()))
-            log_count += 1
-        except sqlite3.Error:
-            continue
+                INSERT INTO materials (code, category, brand, model, package, quantity, unit, price, location, use_case, batch, order_date, min_stock, remark, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (code, m.get("category", "未分类"), m.get("brand", ""), m.get("model", ""), m.get("package", ""),
+                  m.get("quantity", 0), m.get("unit", "个"), m.get("price", 0.0), m.get("location", ""),
+                  m.get("use_case", ""), m.get("batch", ""), m.get("order_date", ""), m.get("min_stock", 0),
+                  m.get("remark", ""), m.get("created_at") or now_local(), m.get("updated_at") or now_local()))
+            mat_count += 1
 
-    conn.commit()
-    conn.close()
+        log_count = 0
+        for l in data.get("stock_logs") or []:
+            code = (l.get("material_code") or "").strip().upper()
+            if not code:
+                continue
+            c.execute("""
+                INSERT INTO stock_logs (id, material_code, change_type, delta, remaining, reason, project, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (l.get("id"), code, l.get("change_type", "init"), l.get("delta", 0), l.get("remaining", 0),
+                  l.get("reason", ""), l.get("project", ""), l.get("created_at") or now_local()))
+            log_count += 1
+
+        c.execute("INSERT OR IGNORE INTO locations (name) SELECT DISTINCT location FROM materials WHERE location != ''")
+        c.execute("DELETE FROM app_meta WHERE key LIKE 'import:%'")
+        for receipt in receipts:
+            c.execute("INSERT OR IGNORE INTO app_meta (key,value) VALUES (?,?)", (receipt["key"], str(receipt.get("value", ""))))
+        c.execute("INSERT OR REPLACE INTO app_meta (key,value) VALUES ('dataset_id',?)", (str(uuid4()),))
     await notify_change("restore", "")
-    return {"message": "恢复完成", "materials": mat_count, "logs": log_count, "locations": loc_count}
+    return {"message": "恢复完成", "materials": mat_count, "logs": log_count, "locations": loc_count, "backup": backup_name}
 
 @app.post("/api/wipe")
 async def wipe_database(confirm: str = Query("")):
@@ -853,13 +791,13 @@ async def wipe_database(confirm: str = Query("")):
     if confirm != "yes":
         raise HTTPException(status_code=400, detail="缺少确认参数，拒绝清空")
     backup_name = _run_backup()
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM stock_logs")
-    c.execute("DELETE FROM materials")
-    c.execute("DELETE FROM locations")
-    conn.commit()
-    conn.close()
+    with transaction() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM stock_logs")
+        c.execute("DELETE FROM materials")
+        c.execute("DELETE FROM locations")
+        c.execute("DELETE FROM app_meta WHERE key LIKE 'import:%'")
+        c.execute("INSERT OR REPLACE INTO app_meta (key,value) VALUES ('dataset_id',?)", (str(uuid4()),))
     await notify_change("wipe", "")
     return {"message": "已清空全部数据", "backup": backup_name}
 
@@ -868,8 +806,8 @@ def get_logs(
     q: Optional[str] = None,
     type: Optional[str] = None,
     days: Optional[int] = None,
-    page: int = 1,
-    page_size: int = 20
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=1000)
 ):
     conn = get_db_connection()
     c = conn.cursor()
@@ -970,19 +908,22 @@ async def bom_check(request: Request, file: Optional[UploadFile] = File(None)):
         if "application/json" in ctype:
             try:
                 body = await request.json()
-                content = (body or {}).get("content")
+                content = body.get("content") if isinstance(body, dict) else None
             except Exception:
                 content = None
         else:
             form = await request.form()
             content = form.get("content")
     if file is not None:
-        raw = await file.read()
+        raw = await read_upload(file)
         fname = (file.filename or "").lower()
         if fname.endswith(".csv"):
             text = raw.decode("utf-8-sig", errors="replace")
             rows = list(csv.DictReader(io.StringIO(text)))
-            items = bom_engine.parse_bom_file_rows(rows)
+            try:
+                items = bom_engine.parse_bom_file_rows(rows)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
         elif fname.endswith(".xlsx") or fname.endswith(".xls"):
             try:
                 import openpyxl
@@ -1013,7 +954,12 @@ async def bom_check(request: Request, file: Optional[UploadFile] = File(None)):
         else:
             raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls / .csv 文件")
     elif content:
-        items = bom_engine.parse_bom_text(content)
+        if not isinstance(content, str):
+            raise HTTPException(400, "BOM 文本必须是字符串")
+        try:
+            items = bom_engine.parse_bom_text(content)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail="请提供 BOM 文本或文件")
 
@@ -1085,13 +1031,10 @@ BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH), "backups")
 
 def _run_backup() -> str:
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    name = f"inventory-{datetime.now().strftime('%Y%m%d')}.db"
+    name = f"inventory-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.db"
     dst_path = os.path.join(BACKUP_DIR, name)
-    src = sqlite3.connect(DB_PATH)
-    dst = sqlite3.connect(dst_path)
-    src.backup(dst)
-    dst.close()
-    src.close()
+    with closing(sqlite3.connect(DB_PATH)) as src, closing(sqlite3.connect(dst_path)) as dst:
+        src.backup(dst)
     # 只保留最近 30 份
     files = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("inventory-") and f.endswith(".db"))
     for f in files[:-30]:
@@ -1138,7 +1081,7 @@ def backup_now():
 
 @app.get("/api/version")
 def get_version():
-    pkg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "package.json")
+    pkg_path = os.path.join(APP_DIR, "package.json")
     try:
         with open(pkg_path, encoding="utf-8") as f:
             v = json.load(f).get("version", "dev")
@@ -1212,6 +1155,8 @@ def export_excel():
             else:
                 v = m.get(k, "")
             cell = ws.cell(row=r, column=col, value=v)
+            if isinstance(v, str):
+                cell.data_type = "s"
             cell.border = border
             cell.font = Font(size=10)
             if k in ("quantity", "price") or k is None:
@@ -1258,9 +1203,19 @@ async def bom_order_excel(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="请求体解析失败")
-    items = body.get("items") or []
+    items = body.get("items") if isinstance(body, dict) else None
     if not items:
         raise HTTPException(status_code=400, detail="没有核对结果可导出")
+    if not isinstance(items, list) or len(items) > 10000 or any(not isinstance(it, dict) for it in items):
+        raise HTTPException(400, "BOM 核对结果无效")
+    for it in items:
+        for key in ("qty", "shortfall", "stock_qty"):
+            value = it.get(key, 0)
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= MAX_QUANTITY:
+                raise HTTPException(400, "BOM 数量无效")
+        price = it.get("matched_price") or 0
+        if not isinstance(price, (int, float)) or not 0 <= price <= 1e12:
+            raise HTTPException(400, "BOM 单价无效")
 
     thin = Side(style="thin", color="D0D7DE")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -1308,10 +1263,10 @@ async def bom_order_excel(request: Request):
     total = 0.0
     for i, row in enumerate(order_rows):
         r = i + 3
-        row[0] = i + 1 if not row[0] else row[0]  # 无编号用序号占位
-        # 序号列单独处理：第一列写编号或序号
-        for col, v in enumerate(row, 1):
+        for col, v in enumerate([i + 1, *row], 1):
             cell = ws.cell(row=r, column=col, value=v)
+            if isinstance(v, str):
+                cell.data_type = "s"
             cell.border = border
             cell.font = Font(size=10)
             if col >= 5:
@@ -1345,6 +1300,8 @@ async def bom_order_excel(request: Request):
         ]
         for col, v in enumerate(vals, 1):
             cell = ws2.cell(row=r, column=col, value=v)
+            if isinstance(v, str):
+                cell.data_type = "s"
             cell.border = border
             cell.font = Font(size=10)
     for i, w in enumerate([6, 34, 14, 8, 12, 34, 8, 10, 8, 10, 10], 1):
@@ -1378,7 +1335,7 @@ def lcsc_price(code: str):
     }
 
 # 挂载前端静态资源（no-cache：每次都回源校验，杜绝 PWA 吃旧版本）
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+FRONTEND_DIR = os.path.join(APP_DIR, "frontend")
 if os.path.exists(FRONTEND_DIR):
     class NoCacheStaticFiles(StaticFiles):
         def file_response(self, *args, **kwargs):
@@ -1391,8 +1348,8 @@ if __name__ == "__main__":
     import uvicorn
     import threading
 
-    cert_file = "/app/certs/cert.pem"
-    key_file = "/app/certs/key.pem"
+    cert_file = os.environ.get("PINBOX_CERT_FILE", os.path.join(APP_DIR, "certs", "cert.pem"))
+    key_file = os.environ.get("PINBOX_KEY_FILE", os.path.join(APP_DIR, "certs", "key.pem"))
 
     # 每日 03:00 自动备份
     _backup_scheduler()
@@ -1407,4 +1364,16 @@ if __name__ == "__main__":
         t.start()
         print("HTTPS server started on port 8089")
 
-    uvicorn.run(app, host="0.0.0.0", port=8088)
+    if getattr(sys, "frozen", False):
+        def open_browser():
+            import urllib.request
+            import webbrowser
+            for _ in range(30):
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:8088/", timeout=1):
+                        webbrowser.open("http://127.0.0.1:8088/")
+                        return
+                except OSError:
+                    time.sleep(0.5)
+        threading.Thread(target=open_browser, daemon=True).start()
+    uvicorn.run(app, host=os.environ.get("PINBOX_HOST", "127.0.0.1" if getattr(sys, "frozen", False) else "0.0.0.0"), port=8088)

@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+node_modules
+android
+data
+certs
+.env
+*.keystore
+**/__pycache__
+.pytest_cache
+test-results
+playwright-report
+build
+dist

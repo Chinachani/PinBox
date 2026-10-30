@@ -6,6 +6,7 @@ BOM 表解析与库存智能匹配引擎
 """
 import re
 from typing import List, Dict, Any, Optional
+from database import get_db_connection
 
 # ---------------------------------------------------------------------------
 # 基础工具
@@ -83,7 +84,7 @@ def decode_spec(line: str) -> Dict[str, Any]:
     if not line:
         return res
 
-    work = str(line)
+    work = str(line).replace('µ', 'u').replace('μ', 'u')
     # 1) 显式电感
     for m in re.finditer(r'(\d+(?:\.\d+)?)\s*(?:UH|µH|UH)', work, re.I):
         res["ind_values"] += _value_to_text(float(m.group(1)), 'ind')
@@ -99,7 +100,7 @@ def decode_spec(line: str) -> Dict[str, Any]:
         val = a * (1 if unit == 'R' else (1e3 if unit == 'K' else 1e6))
         if b:
             frac = float('0.' + b)
-            val = a + frac if unit == 'R' else val * (1 + frac)  # 4K7 → 4.7k
+            val = (a + frac) * (1 if unit == 'R' else (1e3 if unit == 'K' else 1e6))
         res["res_values"] += _value_to_text(val, 'res')
     for m in re.finditer(r'(\d+(?:\.\d+)?)\s*(?:Ω|OHM|KΩ|MΩ)', work, re.I):
         t = m.group(0).upper()
@@ -189,21 +190,19 @@ def parse_bom_text(content: str) -> List[Dict[str, Any]]:
         if cm:
             code = cm.group(1).upper()
 
-        # 数量：最后一个纯整数 token（也兼容 x3 / *3）
+        # Only the final token is a quantity; package codes remain part of the specification.
         qty = 1
-        qty_tokens = []
-        for t in tokens:
-            m = re.fullmatch(r'(?:[xX*×]|\+)?(\d{1,6})', t)
-            if m and not re.fullmatch(r'\d{4,}', t):  # 4 位以上更像料号
-                qty_tokens.append(int(m.group(1)))
-        if qty_tokens:
-            qty = qty_tokens[-1]
-            tokens = [t for t in tokens if not re.fullmatch(r'(?:[xX*×]|\+)?' + str(qty) + r'$', t)]
+        m = re.fullmatch(r'(?:[xX*×]|\+)?(\d{1,9})', tokens[-1])
+        if len(tokens) > 1 and m and (tokens[-1] not in PACKAGE_TOKENS or len(tokens) > 2):
+            qty = int(m.group(1))
+            tokens.pop()
+            if qty < 1:
+                raise ValueError("BOM 数量必须是正整数")
 
-        # 型号主体：最长 token
-        tokens_left = [t for t in tokens if t != (code or '')]
-        model = max(tokens_left, key=len) if tokens_left else (code or '')
-        ref = ' '.join([t for t in tokens_left if t != model]) if len(tokens_left) > 1 else ''
+        tokens_left = [t for t in tokens if t.upper() != (code or '')]
+        refs = [t for t in tokens_left if re.fullmatch(r'(?:R|C|L|D|Q|U|J|P|LED|SW)\d+', t, re.I)]
+        model = ' '.join(t for t in tokens_left if t not in refs) or (code or '')
+        ref = ' '.join(refs)
 
         if not model and not code:
             continue
@@ -221,7 +220,7 @@ def parse_bom_file_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     key_qty = ("数量", "Qty", "Quantity", "用量", "需求数量", "qty")
     key_pkg = ("封装", "Footprint", "Package", "封装格式", "package")
     key_ref = ("位号", "Reference", "Designator", "Ref", "ref")
-    key_code = ("立创编号", "C编号", "商品编号", "LCSC", "Part No.")
+    key_code = ("立创编号", "C编号", "商品编号", "LCSC", "Part No.", "code")
 
     def pick(row, keys):
         for k in keys:
@@ -241,9 +240,12 @@ def parse_bom_file_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         qty_raw = pick(row, key_qty)
         try:
-            qty = int(float(qty_raw)) if qty_raw else 1
-        except ValueError:
-            qty = 1
+            numeric = float(qty_raw) if qty_raw else 1.0
+            if not numeric.is_integer() or numeric < 1 or numeric > 2147483647:
+                raise ValueError("BOM 数量必须是正整数")
+            qty = int(numeric)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("BOM 数量必须是正整数") from exc
         items.append({
             "raw": f"{model} x{qty}", "code": code, "model": model,
             "package": detect_package(pick(row, key_pkg) + ' ' + model),
@@ -267,11 +269,7 @@ def find_materials(query: str, limit: int = 12) -> Dict[str, Any]:
     例："10k 0603 电阻" / "470uF 50V 电解" / "ESP32" / "SS34" / "100nF"
     返回规格解读 + 按相关度排序的库存候选。
     """
-    import os
-    import sqlite3
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "inventory.db")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     inv = [dict(r) for r in conn.execute(
         "SELECT code, model, brand, category, package, quantity, price, location FROM materials").fetchall()]
     conn.close()
@@ -340,11 +338,7 @@ def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
       4. 规格解码匹配（阻值/容值/电感 + 封装 + 类别）
       5. 关键词 token 评分
     """
-    import sqlite3
-    import os
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "inventory.db")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
 
     # 库存全量载入（几千行内内存匹配更快更灵活）
     inv = [dict(r) for r in conn.execute("SELECT code, model, brand, category, package, quantity, price FROM materials").fetchall()]
@@ -379,7 +373,7 @@ def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         continue
                     if ninv == nm:
                         best = {"tier": "norm", "m": m, "score": 0.95}; break
-                    if len(nm) >= 5 and (nm in ninv or ninv in nm):
+                    if min(len(nm), len(ninv)) >= 5 and (nm in ninv or ninv in nm):
                         c = {"tier": "contains", "m": m, "score": 0.85}
                         if not best or c["score"] > best["score"]:
                             best = c
@@ -486,18 +480,17 @@ def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         cand[m["code"]] = {"code": m["code"], "model": m["model"], "brand": m["brand"],
                                            "package": m["package"], "quantity": m["quantity"],
                                            "price": m["price"], "score": round(score, 2)}
-        if best and best["m"]["code"] not in cand:
+        if best:
             bm = best["m"]
             cand[bm["code"]] = {"code": bm["code"], "model": bm["model"], "brand": bm["brand"],
                                 "package": bm["package"], "quantity": bm["quantity"],
                                 "price": bm["price"], "score": best["score"]}
-        cl = sorted(cand.values(), key=lambda c: -c["score"])[:3]
+        cl = sorted(cand.values(), key=lambda c: (not (best and c["code"] == best["m"]["code"]), -c["score"]))[:3]
         it["candidates"] = cl
 
-        if best and best["m"]["code"] in [c["code"] for c in cl]:
+        # Similar specifications are suggestions, not verified electrical substitutes.
+        if best and best["tier"] in ("code", "exact", "norm", "mpn") and (not it.get("code") or best["m"]["code"] == it["code"]):
             chosen = next(c for c in cl if c["code"] == best["m"]["code"])
-        elif cl:
-            chosen = cl[0]
         else:
             chosen = None
 
@@ -519,6 +512,20 @@ def match_bom_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             it["shortfall"] = it["qty"]
             it["status"] = "none"
 
+    return allocate_stock(items)
+
+
+def allocate_stock(items):
+    used = {}
+    for item in items:
+        code = item.get("matched_code")
+        if not code:
+            continue
+        available = max(0, item["stock_qty"] - used.get(code, 0))
+        item["available_qty"] = available
+        item["shortfall"] = max(0, item["qty"] - available)
+        item["status"] = "insufficient" if item["shortfall"] else "ok"
+        used[code] = used.get(code, 0) + item["qty"]
     return items
 
 def summarize(items: List[Dict[str, Any]]) -> Dict[str, Any]:

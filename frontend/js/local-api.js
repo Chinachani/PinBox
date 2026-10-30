@@ -2,7 +2,7 @@
 // LocalAPI - 离线模式本地 API 层
 // 与服务器 API 响应结构完全一致，app.js 无感知切换
 // ============================================================
-const LocalAPI = (() => {
+const createLocalAPI = (LocalDB) => {
 
   // ---------- 工具 ----------
   function nowLocal() {
@@ -25,7 +25,23 @@ const LocalAPI = (() => {
   const errJson = (status, detail) => shim(false, status, { detail });
 
   async function addPendingOp(op) {
-    await LocalDB.add('pending_ops', { ...op, ts: Date.now() });
+    await LocalDB.add('pending_ops', { ...op, op_id: newOperationId(), ts: Date.now() });
+  }
+
+  function validateMaterial(data, partial = false) {
+    for (const key of ['quantity', 'min_stock']) {
+      if (data[key] !== undefined && (!Number.isInteger(data[key]) || data[key] < 0 || data[key] > 2147483647))
+        throw new Error(`${key} 必须是有效非负整数`);
+    }
+    if (data.price !== undefined && (!Number.isFinite(data.price) || data.price < 0 || data.price > 1e12))
+      throw new Error('单价必须是有限非负数');
+    if (!partial && (typeof data.code !== 'string' || !data.code.trim() || /[/\x00-\x1f]/.test(data.code)))
+      throw new Error('物料编号无效');
+    if ((!partial || data.model !== undefined) && (typeof data.model !== 'string' || !data.model.trim()))
+      throw new Error('型号不能为空');
+    for (const key of ['category', 'brand', 'package', 'unit', 'location', 'use_case', 'batch', 'order_date', 'remark']) {
+      if (data[key] !== undefined && typeof data[key] !== 'string') throw new Error(`${key} 必须是文本`);
+    }
   }
 
   async function nextLocId() {
@@ -48,26 +64,25 @@ const LocalAPI = (() => {
     const result = { raw: rawText, code: null, quantity: null, model: null, matched: false };
     if (!rawText) return result;
 
-    let m = rawText.match(/(?:pc|code|item_code)[\s:=]*["']?(C\d{4,9})["']?/i);
-    if (!m) m = rawText.match(/\b(C\d{4,9})\b/i) || rawText.match(/(C\d{4,9})/i);
+    let m = rawText.match(/(?:pc|code|item_code)["']?\s*[:=]\s*["']?(C\d{1,9})(?!\d)/i);
+    if (!m) m = rawText.match(/\b(C\d{1,9})(?!\d)/i);
     if (m) { result.code = m[1].toUpperCase(); result.matched = true; }
 
-    m = rawText.match(/(?:pm|model|型号)[\s:=]*["']?([^,;\n}]+)/i);
-    if (m) result.model = m[1].trim();
+    m = rawText.match(/(?:pm|model|型号)["']?\s*[:=]\s*["']?([^,;\n}]+)/i);
+    if (m) result.model = m[1].trim().replace(/["']$/, '');
 
-    m = rawText.match(/(?:qty|数量|count|pcs|quantity)[\s:=]*["']?([0-9]+(?:\.[0-9]+)?)/i);
+    m = rawText.match(/(?:qty|数量|count|pcs|quantity)["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)(?![\d.])/i);
     if (m) {
-      result.quantity = parseInt(parseFloat(m[1]));
+      const value = Number(m[1]);
+      if (Number.isInteger(value) && value > 0 && value <= 2147483647) result.quantity = value;
     } else {
-      m = rawText.match(/([0-9]+)\s*(?:个|颗|支|块|条|套|PCS|只)\b/i);
+      m = rawText.match(/([0-9]+)\s*(?:个|颗|支|块|条|套|PCS|只)(?![A-Za-z])/i);
       if (m) {
         result.quantity = parseInt(m[1]);
       } else {
         const parts = rawText.split(/[,;|\n]/).map(s => s.trim()).filter(Boolean);
-        if (parts.length >= 2 && result.code) {
-          for (const p of parts) {
-            if (p !== result.code && /^\d+$/.test(p)) { result.quantity = parseInt(p); break; }
-          }
+        if (parts.length >= 2 && parts[0].toUpperCase() === result.code && /^\d{1,7}$/.test(parts[1])) {
+          result.quantity = Number(parts[1]) || null;
         }
       }
     }
@@ -121,7 +136,7 @@ const LocalAPI = (() => {
   function decodeSpec(line) {
     const res = { package: detectPackage(line), res_values: [], cap_values: [], ind_values: [], voltages: [], dims: [], pins: [] };
     if (!line) return res;
-    const work = String(line);
+    const work = String(line).replace(/[µμ]/g, 'u');
     const up = work.toUpperCase();
 
     for (const m of up.matchAll(/(\d+(?:\.\d+)?)\s*(?:UH|µH)/g))
@@ -134,7 +149,7 @@ const LocalAPI = (() => {
     for (const m of up.matchAll(/(\d+(?:\.\d+)?)(R|K|M)(\d+)?\b/g)) {
       const a = parseFloat(m[1]); const unit = m[2]; const b = m[3];
       let val = a * (unit === 'R' ? 1 : (unit === 'K' ? 1e3 : 1e6));
-      if (b) val = unit === 'R' ? a + parseFloat('0.' + b) : val * (1 + parseFloat('0.' + b));
+      if (b) val = (a + parseFloat('0.' + b)) * (unit === 'R' ? 1 : unit === 'K' ? 1e3 : 1e6);
       res.res_values.push(...valueToText(val, 'res'));
     }
     for (const m of up.matchAll(/(\d+(?:\.\d+)?)\s*(Ω|OHM|KΩ|MΩ)/g)) {
@@ -194,18 +209,16 @@ const LocalAPI = (() => {
       const cm = line.match(/\b(C\d{4,9})\b/i);
       const code = cm ? cm[1].toUpperCase() : null;
       let qty = 1;
-      const qtyTokens = [];
-      for (const t of tokens) {
-        const m = t.match(/^(?:[xX*×]\+)?(\d{1,6})$/);
-        if (m && !/^\d{4,}$/.test(t)) qtyTokens.push(parseInt(m[1]));
+      const quantity = tokens.at(-1).match(/^(?:[xX*×]|\+)?(\d{1,9})$/);
+      if (tokens.length > 1 && quantity && (!PACKAGE_TOKENS.includes(tokens.at(-1)) || tokens.length > 2)) {
+        qty = Number(quantity[1]);
+        tokens.pop();
+        if (qty < 1) throw new Error('BOM 数量必须是正整数');
       }
-      if (qtyTokens.length) {
-        qty = qtyTokens[qtyTokens.length - 1];
-        for (const t of tokens) if (t === String(qty) || t === 'x' + qty || t === 'X' + qty) tokens.splice(tokens.indexOf(t), 1);
-      }
-      let left = tokens.filter(t => t !== code);
-      const model = left.length ? left.reduce((a, b) => (b.length > a.length ? b : a)) : (code || '');
-      const ref = left.filter(t => t !== model).join(' ');
+      let left = tokens.filter(t => t.toUpperCase() !== code);
+      const refs = left.filter(t => /^(?:R|C|L|D|Q|U|J|P|LED|SW)\d+$/i.test(t));
+      const model = left.filter(t => !refs.includes(t)).join(' ') || code || '';
+      const ref = refs.join(' ');
       if (!model && !code) return;
       items.push({ raw: line, code, model, package: detectPackage(line), qty: qty > 0 ? qty : 1, ref });
     });
@@ -234,7 +247,7 @@ const LocalAPI = (() => {
             const ninv = norm(m.model);
             if (!ninv) continue;
             if (ninv === nm) { best = { tier: 'norm', m, score: 0.95 }; break; }
-            if (nm.length >= 5 && (ninv.includes(nm) || nm.includes(ninv))) {
+            if (Math.min(nm.length, ninv.length) >= 5 && (ninv.includes(nm) || nm.includes(ninv))) {
               if (!best || best.score < 0.85) best = { tier: 'contains', m, score: 0.85 };
             }
           }
@@ -331,12 +344,13 @@ const LocalAPI = (() => {
           }
         }
       }
-      if (best && !cand[best.m.code]) {
+      if (best) {
         cand[best.m.code] = { code: best.m.code, model: best.m.model, brand: best.m.brand, package: best.m.package, quantity: best.m.quantity, price: best.m.price, score: best.score };
       }
-      it.candidates = Object.values(cand).sort((a, b) => b.score - a.score).slice(0, 3);
+      it.candidates = Object.values(cand).sort((a, b) => Number(b.code === best?.m.code) - Number(a.code === best?.m.code) || b.score - a.score).slice(0, 3);
 
-      const chosen = it.candidates.find(c => best && c.code === best.m.code) || it.candidates[0] || null;
+      const chosen = best && ['code', 'exact', 'norm', 'mpn'].includes(best.tier) && (!it.code || it.code === best.m.code)
+        ? it.candidates.find(c => c.code === best.m.code) : null;
       if (chosen) {
         it.matched_code = chosen.code; it.matched_model = chosen.model;
         it.matched_brand = chosen.brand; it.matched_price = chosen.price;
@@ -349,7 +363,7 @@ const LocalAPI = (() => {
         it.stock_qty = 0; it.match_tier = null; it.shortfall = it.qty; it.status = 'none';
       }
     }
-    return items;
+    return allocateBomStock(items);
   }
 
   function bomSummarize(items) {
@@ -368,57 +382,36 @@ const LocalAPI = (() => {
 
   // ---------- CSV 导入（离线支持 CSV/JSON/TXT） ----------
   function parseCsv(text) {
-    const lines = text.replace(/^\ufeff/, '').split(/\r?\n/).filter(l => l.trim());
-    let headerIdx = 0;
-    for (let i = 0; i < Math.min(10, lines.length); i++) {
-      if (/商品编号|C编号|商品型号|code/i.test(lines[i])) { headerIdx = i; break; }
-    }
-    const splitCsv = (line) => {
-      const out = []; let cur = '', inQ = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (inQ) {
-          if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-          else if (ch === '"') inQ = false;
-          else cur += ch;
-        } else if (ch === '"') inQ = true;
-        else if (ch === ',') { out.push(cur); cur = ''; }
-        else cur += ch;
-      }
-      out.push(cur);
-      return out;
-    };
-    const headers = splitCsv(lines[headerIdx]).map(h => h.trim());
-    const rows = [];
-    for (let i = headerIdx + 1; i < lines.length; i++) {
-      const cells = splitCsv(lines[i]);
-      const row = {};
-      headers.forEach((h, idx) => { row[h] = (cells[idx] || '').trim(); });
-      rows.push(row);
-    }
-    return rows;
+    const result = Papa.parse(text.replace(/^\ufeff/, ''), { skipEmptyLines: 'greedy' });
+    if (result.errors.some(e => e.type === 'Quotes')) throw new Error('CSV 引号未闭合');
+    const rows = result.data;
+    if (!rows.length) return [];
+    const headerIdx = Math.max(0, rows.slice(0, 10).findIndex(row => row.some(c => /^(商品编号|C编号|立创编号|code|型号|model|MPN|Value)$/i.test(c.trim()))));
+    const headers = rows[headerIdx].map(h => h.trim());
+    return rows.slice(headerIdx + 1).map(row => Object.fromEntries(headers.map((h, i) => [h, row[i] ?? ''])));
   }
 
   function rowsToMaterials(rows) {
     const items = [];
     for (const row of rows) {
+      const pick = (...keys) => keys.map(k => row[k]).find(v => v !== undefined && v !== null && String(v).trim() !== '');
       const codeRaw = row['商品编号'] || row['code'] || row['C编号'] || row['立创编号'] || '';
-      const cm = String(codeRaw).match(/(C\d{4,9})/i);
-      if (!cm) continue;
-      const qtyRaw = row['订购数量'] || row['采购数量'] || row['数量'] || row['实发数量'] || 1;
-      let qty = parseInt(parseFloat(qtyRaw));
-      if (isNaN(qty)) qty = 1;
-      const priceRaw = row['单价'] || row['含税单价'] || 0;
-      const price = parseFloat(String(priceRaw).replace(/[￥,]/g, '')) || 0;
+      if (!String(codeRaw).trim()) continue;
+      const qty = Number(String(pick('quantity', '订购数量', '采购数量', '数量', '实发数量', 'qty') ?? 1).replace(/,/g, ''));
+      const price = Number(String(pick('price', '单价', '单价(元)', '含税单价') ?? 0).replace(/[￥¥,]/g, ''));
       items.push({
-        code: cm[1].toUpperCase(),
-        category: row['商品类型'] || row['分类'] || '导入物料',
-        brand: row['品牌'] || '',
-        model: row['商品型号'] || row['商品型号/名称'] || row['型号'] || '',
-        package: row['封装格式'] || row['封装'] || '',
-        quantity: qty, unit: row['商品单位'] || row['单位'] || '个',
-        price, use_case: row['商品名称'] || row['用途'] || '订单导入',
-        batch: '离线导入'
+        code: String(codeRaw).trim().toUpperCase(),
+        category: pick('category', '商品类型', '分类') || '导入物料',
+        brand: pick('brand', '品牌') || '',
+        model: pick('model', '商品型号', '商品型号/名称', '型号') || String(codeRaw),
+        package: pick('package', '封装格式', '封装') || '',
+        quantity: qty, unit: pick('unit', '商品单位', '单位') || '个',
+        price, use_case: pick('use_case', '核心用途/实验场景', '商品名称', '用途') || '',
+        batch: pick('batch', '库存批次', 'source') || '',
+        order_date: pick('order_date', '订单日期') || '',
+        location: pick('location', '库位') || '',
+        min_stock: Number(pick('min_stock', '预警线') ?? 0),
+        remark: pick('remark', '备注') || ''
       });
     }
     return items;
@@ -442,11 +435,21 @@ const LocalAPI = (() => {
         const text = await file.text();
         return { __file: { name: file.name, text } };
       }
-      return null;
+      return typeof body === 'object' ? body : null;
     }
 
     try {
       // ---- 统计 ----
+      if (p === '/api/find' && method === 'GET') {
+        const query = q.get('q') || '';
+        const items = await matchBomItems([{ model: query, qty: 1, package: detectPackage(query) }]);
+        const mats = await LocalDB.getAll('materials');
+        return okJson({ query, spec: decodeSpec(query), results: items[0].candidates.map(c => ({ ...mats.find(m => m.code === c.code), score: c.score })), total: items[0].candidates.length });
+      }
+      if (p.startsWith('/api/lcsc/price/') && method === 'GET') {
+        const code = decodeURIComponent(p.split('/').pop());
+        return okJson({ ok: true, url: 'https://so.szlcsc.com/global.html?k=' + encodeURIComponent(code) });
+      }
       if (p === '/api/stats' && method === 'GET') {
         const mats = await LocalDB.getAll('materials');
         const logs = await LocalDB.getAll('logs');
@@ -470,7 +473,7 @@ const LocalAPI = (() => {
       // ---- 分类 ----
       if (p === '/api/categories' && method === 'GET') {
         const mats = await LocalDB.getAll('materials');
-        const agg = {};
+        const agg = Object.create(null);
         for (const m of mats) {
           agg[m.category] = agg[m.category] || { category: m.category, count: 0, pieces: 0 };
           agg[m.category].count++; agg[m.category].pieces += m.quantity || 0;
@@ -491,6 +494,7 @@ const LocalAPI = (() => {
         if (q.get('category')) items = items.filter(m => m.category === q.get('category'));
         if (q.get('location')) items = items.filter(m => m.location === q.get('location'));
         if (q.get('unassigned') === 'true') items = items.filter(m => !m.location);
+        if (q.get('unassigned') === 'false') items = items.filter(m => !!m.location);
         if (q.get('low_stock') === 'true') items = items.filter(m => (m.min_stock > 0 && m.quantity <= m.min_stock) || m.quantity === 0);
         if (q.get('zero_stock') === 'true') items = items.filter(m => m.quantity === 0);
         const sortMap = {
@@ -502,15 +506,17 @@ const LocalAPI = (() => {
         };
         items.sort(sortMap[q.get('sort_by')] || sortMap.updated_at);
         const total = items.length;
-        const page = Math.max(1, parseInt(q.get('page') || '1'));
-        const pageSize = parseInt(q.get('page_size') || '30');
-        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const page = Number(q.get('page') || '1');
+        const pageSize = Number(q.get('page_size') || '30');
+        if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000) return errJson(422, '分页参数无效');
+        const totalPages = Math.ceil(total / pageSize);
         return okJson({ page, page_size: pageSize, total, total_pages: totalPages, items: items.slice((page - 1) * pageSize, page * pageSize) });
       }
 
       // ---- 建档 ----
       if (p === '/api/materials' && method === 'POST') {
         const d = await readBody();
+        validateMaterial(d);
         const code = (d.code || '').trim().toUpperCase();
         if (!code) return errJson(400, '物料编号不能为空');
         if (!(d.model || '').trim()) return errJson(400, '型号/名称不能为空');
@@ -552,6 +558,7 @@ const LocalAPI = (() => {
         if (method === 'PUT') {
           if (!mat) return errJson(404, '元器件不存在');
           const d = await readBody();
+          validateMaterial(d, true);
           const changes = {};
           for (const k of ['category', 'brand', 'model', 'package', 'quantity', 'unit', 'price', 'location', 'use_case', 'batch', 'order_date', 'min_stock', 'remark']) {
             if (d[k] !== undefined && d[k] !== null) changes[k] = d[k];
@@ -569,9 +576,10 @@ const LocalAPI = (() => {
           if ('quantity' in changes && changes.quantity !== mat.quantity) {
             await addLog(code, 'adjust', changes.quantity - mat.quantity, changes.quantity, '人工直接修正库存');
           }
+          const expected = Object.fromEntries(Object.keys(changes).map(k => [k, mat[k]]));
           Object.assign(mat, changes, { updated_at: nowLocal() });
           await LocalDB.put('materials', mat);
-          await addPendingOp({ kind: 'update', code, payload: changes });
+          await addPendingOp({ kind: 'update', code, payload: changes, expected });
           return okJson({ message: '更新成功' });
         }
         if (method === 'DELETE') {
@@ -579,7 +587,7 @@ const LocalAPI = (() => {
           const allLogs = await LocalDB.byIndex('logs', 'material_code', code);
           for (const l of allLogs) await LocalDB.delete('logs', l.id);
           await LocalDB.delete('materials', code);
-          await addPendingOp({ kind: 'delete', code });
+          await addPendingOp({ kind: 'delete', code, expected: Object.fromEntries(Object.entries(mat).filter(([k]) => !['logs', 'last_in', 'created_at', 'updated_at'].includes(k))) });
           return okJson({ message: `已删除物料 ${code}` });
         }
       }
@@ -591,6 +599,8 @@ const LocalAPI = (() => {
         if (!mat) return errJson(404, '元器件不存在');
         const d = await readBody();
         const delta = d.delta;
+        if (!Number.isInteger(delta) || Math.abs(delta) > 2147483647 || mat.quantity + delta > 2147483647)
+          return errJson(400, '变动数量必须是有效整数');
         if (!delta) return errJson(400, '变动数量不能为 0');
         if (mat.quantity + delta < 0) return errJson(400, `库存不足，当前仅剩 ${mat.quantity} ${mat.unit || '个'}`);
         mat.quantity += delta;
@@ -650,6 +660,9 @@ const LocalAPI = (() => {
         if (!loc) return errJson(404, '库位不存在');
         if (method === 'PUT') {
           const d = await readBody();
+          const originalName = loc.name;
+          const expectedNote = loc.note || '';
+          if (d.name !== undefined && !String(d.name).trim()) return errJson(400, '库位名称不能为空');
           const mats = await LocalDB.getAll('materials');
           if (d.name && d.name.trim() && d.name.trim() !== loc.name) {
             const newName = d.name.trim();
@@ -664,7 +677,7 @@ const LocalAPI = (() => {
           }
           if (d.note !== undefined && d.note !== null) loc.note = d.note;
           await LocalDB.put('locations', loc);
-          await addPendingOp({ kind: 'location_update', id, payload: { name: loc.name, note: loc.note } });
+          await addPendingOp({ kind: 'location_update', original_name: originalName, expected_note: expectedNote, payload: { name: loc.name, note: loc.note } });
           return okJson({ message: '库位已更新' });
         }
         if (method === 'DELETE') {
@@ -677,7 +690,7 @@ const LocalAPI = (() => {
             await LocalDB.put('materials', m);
           }
           await LocalDB.delete('locations', id);
-          await addPendingOp({ kind: 'location_delete', id, name: loc.name, force: true });
+          await addPendingOp({ kind: 'location_delete', name: loc.name, expected_note: loc.note || '', force: true });
           return okJson({ message: `库位 ${loc.name} 已删除`, cleared_materials: used.length });
         }
       }
@@ -691,16 +704,20 @@ const LocalAPI = (() => {
           }
         }
         let updated = 0;
-        for (const raw of d.codes || []) {
+        const expected = {};
+        const codes = [];
+        for (const raw of new Set(d.codes || [])) {
           const code = (raw || '').trim().toUpperCase();
           const mat = await LocalDB.get('materials', code);
           if (!mat) continue;
+          expected[code] = mat.location || '';
+          codes.push(code);
           mat.location = loc; mat.updated_at = nowLocal();
           await LocalDB.put('materials', mat);
           await addLog(code, 'adjust', 0, mat.quantity, `批量归位至「${loc || '未分配'}」`);
           updated++;
         }
-        await addPendingOp({ kind: 'batch_location', codes: d.codes || [], location: loc });
+        await addPendingOp({ kind: 'batch_location', codes, location: loc, expected });
         return okJson({ message: `已将 ${updated} 款物料归位到「${loc || '未分配'}」`, updated });
       }
 
@@ -727,9 +744,10 @@ const LocalAPI = (() => {
         }
         logs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '') || (b.id - a.id));
         const total = logs.length;
-        const page = Math.max(1, parseInt(q.get('page') || '1'));
-        const pageSize = parseInt(q.get('page_size') || '20');
-        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const page = Number(q.get('page') || '1');
+        const pageSize = Number(q.get('page_size') || '20');
+        if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000) return errJson(422, '分页参数无效');
+        const totalPages = Math.ceil(total / pageSize);
         const pageLogs = logs.slice((page - 1) * pageSize, page * pageSize).map(l => {
           const m = matMap[l.material_code] || {};
           return { ...l, model: m.model || '', brand: m.brand || '', unit: m.unit || '', location: m.location || '' };
@@ -741,7 +759,7 @@ const LocalAPI = (() => {
       if (p === '/api/dashboard' && method === 'GET') {
         const mats = await LocalDB.getAll('materials');
         const logs = await LocalDB.getAll('logs');
-        const catAgg = {};
+        const catAgg = Object.create(null);
         for (const m of mats) {
           catAgg[m.category] = catAgg[m.category] || { category: m.category, sku: 0, pieces: 0, value: 0 };
           catAgg[m.category].sku++;
@@ -753,13 +771,13 @@ const LocalAPI = (() => {
         const trendAgg = {};
         for (const l of logs) {
           const day = (l.created_at || '').slice(0, 10);
-          if (!day) continue;
+          if (!day || day < dayLocal(-6)) continue;
           trendAgg[day] = trendAgg[day] || { day, in_qty: 0, out_qty: 0 };
           if (l.delta > 0) trendAgg[day].in_qty += l.delta;
           else if (l.delta < 0) trendAgg[day].out_qty += -l.delta;
         }
         const trend = Object.values(trendAgg).sort((a, b) => a.day.localeCompare(b.day)).slice(-7);
-        const locAgg = {};
+        const locAgg = Object.create(null);
         for (const m of mats) {
           if (!m.location) continue;
           locAgg[m.location] = locAgg[m.location] || { name: m.location, sku_count: 0, pieces: 0 };
@@ -792,7 +810,7 @@ const LocalAPI = (() => {
         const mats = await LocalDB.getAll('materials');
         const matMap = Object.fromEntries(mats.map(m => [m.code, m]));
         const logs = await LocalDB.getAll('logs').then(ls => ls.filter(l => l.delta < 0));
-        const agg = {};
+        const agg = Object.create(null);
         for (const l of logs) {
           const name = l.project || '(未关联项目)';
           agg[name] = agg[name] || { project: name, materials: new Set(), out_pieces: 0, out_cost: 0 };
@@ -812,8 +830,17 @@ const LocalAPI = (() => {
         let items = [];
         if (d && d.__file) {
           const name = d.__file.name.toLowerCase();
-          if (name.endsWith('.csv') || name.endsWith('.txt')) {
-            items = rowsToMaterials(parseCsv(d.__file.text)).map(r => ({ raw: `${r.model} x${r.quantity}`, code: null, model: r.model, package: detectPackage(r.model), qty: r.quantity, ref: '' }));
+          if (name.endsWith('.txt')) {
+            items = parseBomText(d.__file.text);
+          } else if (name.endsWith('.csv')) {
+            items = parseCsv(d.__file.text).map(row => {
+              const pick = (...keys) => keys.map(k => Object.entries(row).find(([h]) => h.toLowerCase() === k.toLowerCase())?.[1]).find(v => v !== undefined && v !== '');
+              const model = pick('model', '型号', '商品型号', 'Value', 'Comment', 'MPN', 'Part Number') || '';
+              const code = pick('code', 'C编号', '商品编号', '立创编号', 'LCSC') || null;
+              const qty = Number(pick('qty', '数量', 'Quantity', '用量') ?? 1);
+              if (!Number.isInteger(qty) || qty <= 0) throw new Error('BOM 数量必须是正整数');
+              return { raw: model, code: code?.toUpperCase(), model, qty, package: pick('package', '封装', 'Footprint') || detectPackage(model), ref: pick('ref', '位号', 'Designator') || '' };
+            }).filter(row => row.code || row.model);
           } else {
             return errJson(400, '离线模式仅支持 CSV/TXT 表格，xlsx 请切回服务器模式导入');
           }
@@ -836,6 +863,8 @@ const LocalAPI = (() => {
           stock_logs: await LocalDB.getAll('logs'),
           locations: await LocalDB.getAll('locations')
         };
+        data.pending_ops = await LocalDB.getAll('pending_ops');
+        data.local_meta = await LocalDB.getAll('meta');
         return okJson(data);
       }
       if (p === '/api/restore' && method === 'POST') {
@@ -843,17 +872,19 @@ const LocalAPI = (() => {
         if (!d || !d.__file) return errJson(400, '请上传备份 JSON 文件');
         let data;
         try { data = JSON.parse(d.__file.text); } catch { return errJson(400, '备份文件解析失败'); }
-        if (!data.materials || !data.materials.length) return errJson(400, '备份文件中没有物料数据');
+        if (q.get('confirm') !== 'yes') return errJson(400, '缺少确认参数');
         await restoreSnapshot(data);
         return okJson({ message: '恢复完成', materials: data.materials.length, locations: (data.locations || []).length, logs: (data.stock_logs || []).length });
       }
 
       // ---- 清空全部本地数据 ----
       if (p === '/api/wipe' && method === 'POST') {
+        if (q.get('confirm') !== 'yes') return errJson(400, '缺少确认参数');
         await LocalDB.clear('logs');
         await LocalDB.clear('materials');
         await LocalDB.clear('locations');
         await LocalDB.clear('pending_ops');
+        await LocalDB.clear('meta');
         return okJson({ message: '已清空本地数据', backup: null });
       }
 
@@ -874,32 +905,45 @@ const LocalAPI = (() => {
           if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
             return errJson(400, '离线模式无法解析 Excel，请切回服务器模式或使用 CSV');
           }
+          let items;
           if (name.endsWith('.json')) {
             const data = JSON.parse(d.__file.text);
-            const mats = (data.materials || []).filter(m => m.code);
-            let added = 0;
-            for (const m of mats) {
-              const exist = await LocalDB.get('materials', m.code);
-              if (exist) { Object.assign(exist, m); await LocalDB.put('materials', exist); }
-              else { await LocalDB.put('materials', { ...m, created_at: nowLocal(), updated_at: nowLocal() }); added++; }
-            }
-            return okJson({ message: '导入完成', total_parsed: mats.length, newly_added: added, stock_updated: mats.length - added, skipped: 0 });
+            items = rowsToMaterials(Array.isArray(data) ? data : data.materials || [...(data.today_orders || []), ...(data.historical_inventory || [])]);
+          } else if (name.endsWith('.csv')) {
+            items = rowsToMaterials(parseCsv(d.__file.text));
+          } else {
+            return errJson(400, '离线导入仅支持 CSV / JSON');
           }
-          const items = rowsToMaterials(parseCsv(d.__file.text));
+          if (!items.length) return errJson(400, '文件没有有效物料');
+          const receipt = 'import:' + d.__file.hash;
+          if (await LocalDB.get('meta', receipt)) return errJson(409, '此文件已导入，已阻止重复累计库存');
           let added = 0, updated = 0;
           for (const r of items) {
+            validateMaterial(r);
+            r.batch = r.batch || d.__file.name;
             const exist = await LocalDB.get('materials', r.code);
             if (exist) {
+              if (exist.quantity + r.quantity > 2147483647) throw new Error('累计数量越界');
               exist.quantity += r.quantity; exist.updated_at = nowLocal();
-              await LocalDB.put('materials', exist);
               await addLog(r.code, 'import', r.quantity, exist.quantity, `离线订单导入累加 (${d.__file.name})`);
+              const changes = { batch: [...new Set([exist.batch, r.batch].filter(Boolean))].join(' + ') };
+              if (r.price > 0) changes.price = r.price;
+              Object.assign(exist, changes);
+              await LocalDB.put('materials', exist);
               updated++;
             } else {
-              await LocalDB.put('materials', { ...r, location: '', min_stock: 0, remark: '', created_at: nowLocal(), updated_at: nowLocal() });
-              await addLog(r.code, 'init', r.quantity, r.quantity, `离线订单导入建档 (${d.__file.name})`);
+              const material = { ...r, created_at: nowLocal(), updated_at: nowLocal() };
+              if (r.location) {
+                const locs = await LocalDB.getAll('locations');
+                if (!locs.some(l => l.name === r.location)) await LocalDB.put('locations', { id: await nextLocId(), name: r.location, note: '', created_at: nowLocal() });
+              }
+              await LocalDB.put('materials', material);
+              await addLog(r.code, 'init', r.quantity, r.quantity, `离线订单导入建档 (${r.batch})`);
               added++;
             }
           }
+          await addPendingOp({ kind: 'import', records: items, receipt: d.__file.hash, filename: d.__file.name });
+          await LocalDB.put('meta', { key: receipt, value: nowLocal() });
           return okJson({ message: '导入完成', total_parsed: items.length, newly_added: added, stock_updated: updated, skipped: 0 });
         }
         return errJson(400, '请上传文件');
@@ -908,28 +952,122 @@ const LocalAPI = (() => {
       return errJson(404, `离线模式暂不支持该接口: ${method} ${p}`);
     } catch (e) {
       console.error('LocalAPI error', e);
-      return errJson(500, '本地数据处理出错: ' + e.message);
+      return errJson(400, '本地数据处理出错: ' + e.message);
     }
   }
 
   // 快照恢复（供同步拉取与本地上传共用）
   async function restoreSnapshot(data) {
+    if (!data || !Array.isArray(data.materials) || !Array.isArray(data.stock_logs || []) || !Array.isArray(data.locations || []))
+      throw new Error('备份结构无效');
+    const codes = new Set();
+    for (const mat of data.materials) {
+      validateMaterial(mat);
+      mat.code = mat.code.trim().toUpperCase();
+      if (codes.has(mat.code)) throw new Error('备份含重复物料编号');
+      codes.add(mat.code);
+    }
+    const logIds = new Set();
+    for (const log of data.stock_logs || []) {
+      log.material_code = String(log.material_code || '').trim().toUpperCase();
+      if (!codes.has(log.material_code) || !Number.isInteger(log.delta) || !Number.isInteger(log.remaining) || log.remaining < 0)
+        throw new Error('备份流水无效');
+      if (log.id !== undefined && (!Number.isInteger(log.id) || log.id < 1 || logIds.has(log.id))) throw new Error('流水 ID 无效');
+      logIds.add(log.id);
+    }
+    const names = new Set(), ids = new Set();
+    for (const loc of data.locations || []) {
+      if (typeof loc.name !== 'string' || !loc.name.trim() || names.has(loc.name.trim())) throw new Error('库位名称无效或重复');
+      loc.name = loc.name.trim();
+      names.add(loc.name);
+      if (loc.id !== undefined && (!Number.isInteger(loc.id) || loc.id < 1 || ids.has(loc.id))) throw new Error('库位 ID 无效');
+      ids.add(loc.id);
+    }
     await LocalDB.clear('materials');
     await LocalDB.clear('logs');
     await LocalDB.clear('locations');
-    let maxLocId = 0;
+    await LocalDB.clear('meta');
+    let maxLocId = Math.max(0, ...[...ids].filter(Number.isInteger));
     for (const loc of (data.locations || [])) {
       if (!loc.name) continue;
-      const id = loc.id || (await nextLocId());
+      const id = loc.id || ++maxLocId;
       maxLocId = Math.max(maxLocId, id);
       await LocalDB.put('locations', { id, name: loc.name, note: loc.note || '', created_at: loc.created_at || nowLocal() });
+    }
+    for (const mat of data.materials) {
+      if (mat.location && !names.has(mat.location)) {
+        names.add(mat.location);
+        await LocalDB.put('locations', { id: ++maxLocId, name: mat.location, note: '', created_at: nowLocal() });
+      }
     }
     await LocalDB.put('meta', { key: 'loc_seq', value: maxLocId });
     await LocalDB.bulkPut('materials', (data.materials || []).filter(m => m.code));
     await LocalDB.bulkPut('logs', (data.stock_logs || []).filter(l => l.material_code));
     await LocalDB.put('meta', { key: 'last_sync', value: nowLocal() });
+    await LocalDB.put('meta', { key: 'dataset_id', value: data.dataset_id || null });
+    if (data.import_receipts !== undefined) {
+      if (!Array.isArray(data.import_receipts)) throw new Error('导入记录无效');
+      for (const receipt of data.import_receipts) {
+        if (typeof receipt.key !== 'string' || !receipt.key.startsWith('import:')) throw new Error('导入记录无效');
+        await LocalDB.put('meta', receipt);
+      }
+    }
     await LocalDB.clear('pending_ops');
+    if (data.pending_ops !== undefined) {
+      if (!Array.isArray(data.pending_ops)) throw new Error('待同步队列无效');
+      for (const op of data.pending_ops) {
+        // Legacy operations remain restorable, but sync refuses to replay them without an ID.
+        if (!op || typeof op.kind !== 'string' || !op.kind ||
+            (op.op_id !== undefined && (typeof op.op_id !== 'string' || !op.op_id)))
+          throw new Error('待同步操作无效');
+      }
+      await LocalDB.bulkPut('pending_ops', data.pending_ops);
+    }
+    if (data.local_meta !== undefined) {
+      if (!Array.isArray(data.local_meta)) throw new Error('本地元数据无效');
+      await LocalDB.bulkPut('meta', data.local_meta);
+    }
   }
 
-  return { handle, parseLcscBarcode, restoreSnapshot, parseBomText };
-})();
+  return { handle, parseLcscBarcode, restoreSnapshot, parseBomText, decodeSpec, matchBomItems };
+};
+
+function newOperationId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function allocateBomStock(items) {
+  const used = new Map();
+  for (const it of items) {
+    if (!it.matched_code) continue;
+    const available = Math.max(0, it.stock_qty - (used.get(it.matched_code) || 0));
+    it.available_qty = available;
+    it.shortfall = Math.max(0, it.qty - available);
+    it.status = it.shortfall ? 'insufficient' : 'ok';
+    used.set(it.matched_code, (used.get(it.matched_code) || 0) + it.qty);
+  }
+  return items;
+}
+
+const LocalAPI = {
+  ...createLocalAPI(LocalDB),
+  async handle(method, path, opts = {}) {
+    if (opts.body instanceof FormData) {
+      const file = opts.body.get('file');
+      if (file) {
+        if (file.size > 20 * 1024 * 1024) return { ok: false, status: 413, json: async () => ({ detail: '文件不能超过 20 MB' }) };
+        const bytes = await file.arrayBuffer();
+        let text;
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch { text = new TextDecoder('gb18030').decode(bytes); }
+        const hash = sha256(bytes);
+        opts = { ...opts, body: { __file: { name: file.name, text, hash } } };
+      }
+    }
+    return LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'],
+      db => createLocalAPI(db).handle(method.toUpperCase(), path, opts));
+  },
+  restoreSnapshot: data => LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'],
+    db => createLocalAPI(db).restoreSnapshot(data))
+};

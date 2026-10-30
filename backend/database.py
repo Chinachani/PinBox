@@ -1,7 +1,14 @@
 import os
 import sqlite3
+import sys
+from contextlib import contextmanager
 
-DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+APP_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
+if getattr(sys, "frozen", False):
+    default_data = os.path.join(os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "PinBox")
+else:
+    default_data = os.path.join(APP_DIR, "data")
+DB_DIR = os.path.abspath(os.environ.get("PINBOX_DATA_DIR", default_data))
 DB_PATH = os.path.join(DB_DIR, "inventory.db")
 
 def get_db_connection() -> sqlite3.Connection:
@@ -11,6 +18,20 @@ def get_db_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
+
+
+@contextmanager
+def transaction():
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def init_db():
     conn = get_db_connection()
@@ -70,6 +91,18 @@ def init_db():
     );
     """)
 
+    # 离线同步幂等响应缓存。客户端可能在服务器已提交后丢失响应，
+    # 重试时必须返回同一结果，不能再次扣减库存。
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+        key TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
+        result TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys (created_at);")
+
     # 索引优化检索速度
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_category ON materials (category);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_location ON materials (location);")
@@ -78,16 +111,14 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_created ON stock_logs (created_at);")
 
     # 历史结构升级（老库无 price 列时补齐）
-    try:
+    columns = {r[1] for r in cursor.execute("PRAGMA table_info(materials)")}
+    if "price" not in columns:
         cursor.execute("ALTER TABLE materials ADD COLUMN price REAL DEFAULT 0.0;")
-    except Exception:
-        pass
 
     # 流水关联项目（项目领料统计）
-    try:
+    columns = {r[1] for r in cursor.execute("PRAGMA table_info(stock_logs)")}
+    if "project" not in columns:
         cursor.execute("ALTER TABLE stock_logs ADD COLUMN project TEXT DEFAULT '';")
-    except Exception:
-        pass
 
     # 一次性时区迁移：老数据由 UTC 校正为东八区本地时间
     migrated = cursor.execute("SELECT value FROM app_meta WHERE key = 'tz_shift_plus8_v1'").fetchone()

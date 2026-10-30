@@ -12,12 +12,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="PinBox">
-  <link rel="stylesheet" href="/css/style.css?v=202610281900">
-  <script src="/js/html5-qrcode.min.js?v=202610281900"></script>
-  <script src="/js/qrcode.min.js?v=202610281900"></script>
-  <script src="/js/local-db.js?v=202610281900"></script>
-  <script src="/js/local-api.js?v=202610281900"></script>
-  <script src="/js/api.js?v=202610281900"></script>
+  <link rel="stylesheet" href="/css/style.css?v=202610300120">
+  <script src="/js/html5-qrcode.min.js?v=202610300120"></script>
+  <script src="/js/qrcode.min.js?v=202610300120"></script>
+  <script src="/js/papaparse.min.js?v=202610300120"></script>
+  <script src="/js/sha256.min.js?v=202610300120"></script>
+  <script src="/js/local-db.js?v=202610300120"></script>
+  <script src="/js/local-api.js?v=202610300120"></script>
+  <script src="/js/api.js?v=202610300120"></script>
 </head>
 <body>
 
@@ -493,7 +495,7 @@
           <!-- 数据中心：离线模式与同步 -->
           <div class="panel">
             <div class="panel-title">数据中心 · 离线与同步</div>
-            <div class="panel-desc">手机装到桌面后可完全离线使用（数据存本机）；回到局域网后把离线变更推送到服务器，或拉取服务器最新库存覆盖本机。<b>注意：手机需与服务器同一局域网（连家里 WiFi，4G 无法访问）；App 端同步请用 http://…:8088 端口。</b></div>
+            <div class="panel-desc">手机装到桌面后可完全离线使用（数据存本机）；回到局域网后把离线变更推送到服务器，或拉取服务器最新库存覆盖本机。<b>注意：手机需与服务器同一局域网（连家里 WiFi，4G 无法访问）；App 可使用 HTTP 或可信证书的 HTTPS 地址；HTTPS 网页须连接 HTTPS 服务器。</b></div>
             <div class="sync-grid">
               <div class="form-group">
                 <label class="form-label">运行模式</label>
@@ -504,8 +506,12 @@
               </div>
               <div class="form-group" style="flex: 1; min-width: 220px;">
                 <label class="form-label">服务器地址（同步用）</label>
-                <input type="text" class="form-input" id="input-server-url" placeholder="http://192.168.1.219:8088">
+                <input type="text" class="form-input" id="input-server-url" placeholder="http://服务器IP:8088">
               </div>
+            </div>
+            <div class="form-group">
+              <label for="input-api-token">服务器访问令牌（服务器启用时填写）</label>
+              <input type="password" class="form-input" id="input-api-token" autocomplete="off" placeholder="可选；测试连接时保存">
             </div>
             <div class="sync-actions">
               <button class="btn-action btn-secondary btn-sm" id="btn-sync-test">测试连接</button>
@@ -526,7 +532,7 @@
         <div class="tools-wrap">
           <div class="panel">
             <div class="panel-title">BOM 一键核对：库存命中与成本估算</div>
-            <div class="panel-desc">粘贴 BOM 文本（每行：<b>型号〔封装…〕 数量</b>，空格/Tab/逗号均可）或上传立创/嘉立创EDA导出的 BOM 表格。系统逐行智能匹配库存（支持同规格跨品牌匹配），给出缺料与成本。</div>
+            <div class="panel-desc">粘贴 BOM 文本（每行：<b>型号〔封装…〕 数量</b>，空格/Tab/逗号均可）或上传 BOM 表格。编号或明确型号自动匹配；相似规格作为候选，请核对封装、额定值及引脚后选择。重复行共同使用同一份库存。</div>
             <textarea class="form-input bom-textarea" id="bom-text" rows="9" placeholder="KF301-5.0-2P    3
 XL1509-5.0E1    1
 SS34    2
@@ -807,6 +813,6 @@ C25703 5 ..."></textarea>
 
   <div class="toast" id="toast">操作成功</div>
 
-  <script src="/js/app.js?v=202610281900"></script>
+  <script src="/js/app.js?v=202610300120"></script>
 </body>
 </html>

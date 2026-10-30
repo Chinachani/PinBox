@@ -1,133 +1,85 @@
-// ============================================================
-// DataLayer - 服务器/离线双模式数据层 + 同步
-// ============================================================
-// 独立运行环境判定：Capacitor 原生壳（APK）或 PWA standalone（安装到桌面）
+const APP_VERSION = '1.0.20';
+
 function isStandaloneApp() {
-  try {
-    if (window.Capacitor && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform()) return true;
-  } catch (e) { /* 非 Capacitor 环境 */ }
-  return window.matchMedia('(display-mode: standalone)').matches
-    || window.navigator.standalone === true;   // iOS Safari 添加到主屏
+  return !!window.Capacitor?.isNativePlatform?.() || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 }
 
-// App 内原生 HTTP：走原生 HttpURLConnection，绕开 WebView 的混合内容/CORS 限制
 function isNativeHttpAvailable() {
-  try {
-    return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
-      && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp);
-  } catch (e) { return false; }
+  return !!(window.Capacitor?.isNativePlatform?.() && window.Capacitor.Plugins?.CapacitorHttp);
 }
 
-async function nativeRequest(method, url, bodyObj) {
-  const CHttp = window.Capacitor.Plugins.CapacitorHttp;
-  const opts = {
-    url,
-    method: method.toUpperCase(),
-    headers: { 'Content-Type': 'application/json' }
-  };
-  if (bodyObj !== undefined) opts.data = bodyObj;
-  const r = await CHttp.request(opts);
-  let data = r.data;
-  if (typeof data === 'string') {
-    try { data = JSON.parse(data); } catch (e) { /* 保留原始字符串 */ }
-  }
-  return {
-    ok: r.status >= 200 && r.status < 300,
-    status: r.status,
-    json: async () => data,
-    text: async () => (typeof data === 'string' ? data : JSON.stringify(data))
-  };
-}
-
-// 局域网/本机地址判定：这类地址的服务器是自签证书，原生层 TLS 校验必失败
-function isPrivateHost(h) {
-  return /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || h === 'localhost' || h === '127.0.0.1';
-}
-
-// 原生壳（APK）专用地址规整：局域网 https（自签证书）会被系统 TLS 拒绝
-// （CertPathValidatorException），一律改回 http 直连；无端口/8089/443 → 8088。
-// 公网地址可能是正式证书，不动。
-function normalizeNativeUrl(raw) {
-  let url = (raw || '').trim().replace(/\/+$/, '');
-  if (!url || !isNativeHttpAvailable()) return url;
-  if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-  try {
-    const u = new URL(url);
-    if (!isPrivateHost(u.hostname)) return url;
-    if (u.protocol === 'https:') u.protocol = 'http:';
-    if (!u.port || u.port === '443' || u.port === '8089') u.port = '8088';
-    return u.toString().replace(/\/+$/, '');
-  } catch (e) { return url; }
-}
-
-// 同步地址解析：
-//   - 浏览器 PWA（https 页面）禁止请求 http 接口 → 自动升级为 https 并换 8089 口
-//   - Capacitor 原生壳 → normalizeNativeUrl 规整为 http 直连
 function resolveSyncBase(raw) {
-  let url = (raw || '').trim().replace(/\/+$/, '');
-  if (!url) return '';
-  if (window.location.protocol === 'https:' && url.startsWith('http://')) {
-    url = 'https://' + url.slice(7).replace(':8088', ':8089');
+  let value = String(raw || '').trim();
+  if (!value) return '';
+  if (!/^https?:\/\//i.test(value)) value = 'http://' + value;
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+    throw new Error('请输入不含账号、查询参数的 HTTP/HTTPS 服务器地址');
+  // Never silently downgrade TLS or guess a different server port.
+  if (!isNativeHttpAvailable() && location.protocol === 'https:' && url.protocol === 'http:')
+    throw new Error('HTTPS 页面不能访问 HTTP 服务器，请填写可信的 HTTPS 地址');
+  return url.toString().replace(/\/+$/, '');
+}
+
+function serverHeaders(extra = {}) {
+  const headers = new Headers(extra);
+  const token = localStorage.getItem('wms-api-token');
+  if (token) headers.set('Authorization', 'Bearer ' + token);
+  return Object.fromEntries(headers);
+}
+
+async function nativeRequest(method, url, body, extra = {}) {
+  const opts = { url, method: method.toUpperCase(), headers: serverHeaders(extra.headers), connectTimeout: 5000, readTimeout: 30000, responseType: extra.responseType || 'json' };
+  if (body instanceof FormData) {
+    const boundary = 'pinbox-' + newOperationId();
+    opts.headers['Content-Type'] = 'multipart/form-data; boundary=' + boundary;
+    opts.dataType = 'formData';
+    opts.data = await Promise.all([...body.entries()].map(async ([key, value]) => {
+      if (typeof value === 'string') return { key, type: 'string', value };
+      const encoded = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(value);
+      });
+      return { key, type: 'base64File', value: encoded, fileName: value.name, contentType: value.type || 'application/octet-stream' };
+    }));
+  } else if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.data = typeof body === 'string' ? JSON.parse(body) : body;
   }
-  return normalizeNativeUrl(url);
+  const result = await window.Capacitor.Plugins.CapacitorHttp.request(opts);
+  const headers = new Headers(result.headers || {});
+  let data = result.data;
+  if (extra.responseType === 'blob' && !headers.get('content-type')?.includes('json')) {
+    data = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+  } else if (typeof data !== 'string') {
+    data = JSON.stringify(data);
+  }
+  return new Response(data, { status: result.status, headers });
 }
 
-// 与 package.json 同步的版本号（发版时一起改）
-const APP_VERSION = '1.0.19';
-// 用户自己的服务器（独立端首次使用时预置，免手填）
-const DEFAULT_SERVER_URL = 'http://192.168.1.219:8088';
-
-// 独立端首次启动：预置服务器地址，让「拉取/推送」开箱即用
-if (isStandaloneApp() && !localStorage.getItem('wms-server-url')) {
-  localStorage.setItem('wms-server-url', DEFAULT_SERVER_URL);
-}
-// 老版本遗留修复：之前手动存过的局域网 https 地址在原生壳里过不了自签证书校验，启动时自动改回 http
-if (isStandaloneApp() && isNativeHttpAvailable() && localStorage.getItem('wms-server-url')) {
-  const _saved = localStorage.getItem('wms-server-url') || '';
-  const _fixed = normalizeNativeUrl(_saved);
-  if (_fixed && _fixed !== _saved) localStorage.setItem('wms-server-url', _fixed);
+async function serverRequest(base, path, opts = {}) {
+  if (isNativeHttpAvailable()) return nativeRequest(opts.method || 'GET', base + path, opts.body, opts);
+  const { responseType, ...fetchOpts } = opts;
+  return fetch(base + path, { ...fetchOpts, headers: serverHeaders(opts.headers), signal: opts.signal || AbortSignal.timeout(30000) });
 }
 
 const DataLayer = {
-  // 独立端（APK/桌面 PWA）默认本地离线模式；网页访问默认服务器模式。
-  // 用户手动切换过则尊重 localStorage 的选择。
-  mode: localStorage.getItem('wms-mode')
-    || (isStandaloneApp() ? 'local' : 'server'),
-  serverUrl: (localStorage.getItem('wms-server-url') || '').replace(/\/+$/, ''),
-
+  mode: localStorage.getItem('wms-mode') || (isStandaloneApp() ? 'local' : 'server'),
+  serverUrl: localStorage.getItem('wms-server-url') || '',
   setMode(mode) {
+    if (!['server', 'local'].includes(mode)) throw new Error('无效数据模式');
     this.mode = mode;
     localStorage.setItem('wms-mode', mode);
   },
-
-  setServerUrl(url) {
-    this.serverUrl = (url || '').trim().replace(/\/+$/, '');
+  setServerUrl(value) {
+    this.serverUrl = resolveSyncBase(value);
     localStorage.setItem('wms-server-url', this.serverUrl);
   },
-
-  // 统一请求入口：返回 Response-like 对象 {ok,status,json()}
   async api(path, opts = {}) {
-    if (this.mode === 'local') {
-      return LocalAPI.handle(opts.method || 'GET', path, opts);
-    }
-    const base = this.mode === 'server' && this.serverUrl ? this.serverUrl : '';
-    // APK 原生壳：JSON 请求统一走原生 HTTP，绕开 WebView 对局域网 http 地址的混合内容限制；
-    // FormData/Blob（导入、恢复上传）无原生等价实现，回退 fetch
-    const body = opts.body;
-    const isUpload = body instanceof FormData || body instanceof Blob;
-    if (base && isNativeHttpAvailable() && !isUpload) {
-      let bodyObj;
-      if (body && typeof body === 'object') bodyObj = body;
-      else if (typeof body === 'string' && body) {
-        try { bodyObj = JSON.parse(body); } catch (e) { bodyObj = undefined; }
-      }
-      // 非 JSON 字符串（表单编码等）解析不出来 → 落回 fetch
-      if (typeof body !== 'string' || bodyObj !== undefined) {
-        return nativeRequest(opts.method || 'GET', base + path, bodyObj);
-      }
-    }
-    const res = await fetch(base + path, opts);
-    return res;
+    if (this.mode === 'local') return LocalAPI.handle(opts.method || 'GET', path, opts);
+    return serverRequest(resolveSyncBase(this.serverUrl), path, opts);
   }
 };
 
@@ -135,184 +87,87 @@ async function api(path, opts = {}) {
   return DataLayer.api(path, opts);
 }
 
-// ---------- 同步功能 ----------
+function syncBase() {
+  return resolveSyncBase(DataLayer.serverUrl) || (isNativeHttpAvailable() ? '' : location.origin);
+}
 
 async function syncTestConnection() {
-  const base = resolveSyncBase(DataLayer.serverUrl);
-  if (!base) return { ok: false, msg: '请先填写服务器地址' };
-
-  const attempt = async (b) => {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    try {
-      let res;
-      if (isNativeHttpAvailable()) {
-        res = await nativeRequest('GET', b + '/api/stats');
-      } else {
-        res = await fetch(b + '/api/stats', { signal: ctrl.signal });
-      }
-      clearTimeout(timer);
-      if (res.ok) {
-        const d = await res.json();
-        return { ok: true, msg: `连接成功（${b.replace(/^https?:\/\//, '')}）：${d.total_sku} 款物料 / ${d.total_pieces} 件` };
-      }
-      return { ok: false, msg: `服务器响应异常 (HTTP ${res.status})` };
-    } catch (e) {
-      clearTimeout(timer);
-      const m = e.message || '网络不可达';
-      return { ok: false, msg: '连接失败：' + m, certError: /Trust anchor|CertPathValidator|SSL|certificate/i.test(m) };
-    }
-  };
-
-  const r = await attempt(base);
-  if (r.ok) return r;
-
-  // 自签证书被系统拒绝（用户存过 https 地址）：自动换 http:8088 重试，成功则顺手修正保存的地址
-  if (r.certError) {
-    try {
-      const u = new URL(/^https?:\/\//i.test(DataLayer.serverUrl) ? DataLayer.serverUrl : 'http://' + DataLayer.serverUrl);
-      const httpBase = `http://${u.hostname}:8088`;
-      const r2 = await attempt(httpBase);
-      if (r2.ok) {
-        DataLayer.setServerUrl(httpBase);
-        r2.msg = 'HTTPS 证书不受信任（自签名），已自动改用 ' + httpBase.replace(/^https?:\/\//, '') + ' —— ' + r2.msg;
-      } else {
-        r2.msg = 'HTTPS 证书不受信任（自签名），改用 ' + httpBase.replace(/^https?:\/\//, '') + ' 也未连通 —— ' + r2.msg + '。请确认手机连的是家里 WiFi（4G 访问不到局域网地址）';
-      }
-      return r2;
-    } catch (e) { /* 落到下面的通用提示 */ }
-  }
-  return { ok: false, msg: r.msg + '。请确认手机连的是家里 WiFi（4G 访问不到局域网地址）' };
+  try {
+    const base = syncBase();
+    if (!base) throw new Error('请先填写服务器地址');
+    const res = await serverRequest(base, '/api/stats');
+    const data = await res.json();
+    if (!res.ok || !Number.isInteger(data.total_sku)) throw new Error(data.detail || `HTTP ${res.status}`);
+    return { ok: true, msg: `连接成功：${data.total_sku} 款物料 / ${data.total_pieces} 件` };
+  } catch (error) { return { ok: false, msg: '连接失败：' + error.message }; }
 }
 
-// 把本地离线操作推送到服务器
-async function syncPushOps() {
-  const base = resolveSyncBase(DataLayer.serverUrl);
-  if (!base) return { ok: false, msg: '请先填写服务器地址' };
-  const ops = await LocalDB.getAll('pending_ops');
-  if (!ops.length) return { ok: true, msg: '没有待推送的离线变更', pushed: 0 };
-  ops.sort((a, b) => a.id - b.id);
+let syncInFlight = false;
+async function withSyncLock(callback) {
+  if (syncInFlight) return { ok: false, msg: '同步正在进行，请等待完成' };
+  syncInFlight = true;
+  try {
+    if (navigator.locks) return await navigator.locks.request('pinbox-sync', callback);
+    return await callback();
+  } finally { syncInFlight = false; }
+}
 
-  const useNative = isNativeHttpAvailable();
-  let pushed = 0, failed = 0, failMsg = '';
-  for (const op of ops) {
-    let res, data;
+async function syncPushOps() {
+  return withSyncLock(async () => {
+    let pushed = 0;
     try {
-      switch (op.kind) {
-        case 'stock':
-          res = useNative
-            ? await nativeRequest('POST', `${base}/api/materials/${op.code}/stock`, { delta: op.delta, reason: (op.reason || '') + '（离线同步）', project: op.project || '' })
-            : await fetch(`${base}/api/materials/${op.code}/stock`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ delta: op.delta, reason: (op.reason || '') + '（离线同步）', project: op.project || '' })
-              });
-          break;
-        case 'create':
-          res = useNative
-            ? await nativeRequest('POST', `${base}/api/materials`, op.payload)
-            : await fetch(`${base}/api/materials`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(op.payload)
-              });
-          break;
-        case 'update':
-          res = useNative
-            ? await nativeRequest('PUT', `${base}/api/materials/${op.code}`, op.payload)
-            : await fetch(`${base}/api/materials/${op.code}`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(op.payload)
-              });
-          break;
-        case 'delete':
-          res = useNative
-            ? await nativeRequest('DELETE', `${base}/api/materials/${op.code}`)
-            : await fetch(`${base}/api/materials/${op.code}`, { method: 'DELETE' });
-          break;
-        case 'location_create':
-          res = useNative
-            ? await nativeRequest('POST', `${base}/api/locations`, { name: op.name, note: op.note })
-            : await fetch(`${base}/api/locations`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: op.name, note: op.note })
-              });
-          break;
-        case 'location_update':
-          res = useNative
-            ? await nativeRequest('PUT', `${base}/api/locations/${op.id}`, op.payload)
-            : await fetch(`${base}/api/locations/${op.id}`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(op.payload)
-              });
-          break;
-        case 'location_delete':
-          res = useNative
-            ? await nativeRequest('DELETE', `${base}/api/locations/${op.id}?force=true`)
-            : await fetch(`${base}/api/locations/${op.id}?force=true`, { method: 'DELETE' });
-          break;
-        case 'batch_location':
-          res = useNative
-            ? await nativeRequest('POST', `${base}/api/batch-location`, { codes: op.codes, location: op.location })
-            : await fetch(`${base}/api/batch-location`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ codes: op.codes, location: op.location })
-              });
-          break;
-        default:
-          failed++; failMsg = `未知操作类型 ${op.kind}`;
-          continue;
+      const base = syncBase();
+      if (!base) throw new Error('请先填写服务器地址');
+      const meta = await LocalDB.get('meta', 'sync_server');
+      if (meta?.value && meta.value !== base) throw new Error('本机队列属于另一台服务器，请先备份并核对');
+      let dataset = await LocalDB.get('meta', 'dataset_id');
+      if (!dataset?.value) {
+        const stateRes = await serverRequest(base, '/api/sync/state');
+        const state = await stateRes.json();
+        if (!stateRes.ok || !state.dataset_id) throw new Error(state.detail || '服务器不支持安全同步，请先升级服务器');
+        dataset = { key: 'dataset_id', value: state.dataset_id };
+        await LocalDB.put('meta', dataset);
       }
-      data = await res.json().catch(() => ({}));
-      if (res.ok) {
+      const ops = (await LocalDB.getAll('pending_ops')).sort((a, b) => a.id - b.id);
+      if (ops.length) await LocalDB.put('meta', { key: 'sync_server', value: base });
+      for (const op of ops) {
+        if (!op.op_id) {
+          throw new Error('旧版待同步操作缺少操作号，请先导出本地备份并核对是否已入账，再处理队列');
+        }
+        const res = await serverRequest(base, '/api/sync/op', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation: op, dataset_id: dataset?.value || null })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
         await LocalDB.delete('pending_ops', op.id);
         pushed++;
-      } else if (res.status === 400 && /已存在/.test(data.detail || '')) {
-        // 建档冲突：转为更新
-        if (op.kind === 'create' && op.payload && op.payload.code) {
-          const { code, ...payload } = op.payload;
-          const r2 = useNative
-            ? await nativeRequest('PUT', `${base}/api/materials/${code}`, payload)
-            : await fetch(`${base}/api/materials/${code}`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-          if (r2.ok) { await LocalDB.delete('pending_ops', op.id); pushed++; continue; }
-        }
-        // 其他 400（如库存不足）视为业务性失败，丢弃该条避免死循环
-        await LocalDB.delete('pending_ops', op.id);
-        failed++; failMsg = data.detail || '';
-      } else {
-        failed++; failMsg = data.detail || `HTTP ${res.status}`;
-        break; // 网络/服务器异常时保留剩余操作，下次再推
       }
-    } catch (e) {
-      failed++; failMsg = '网络错误：' + (e.message || '不可达');
-      break;
+      return { ok: true, pushed, msg: `推送完成：成功 ${pushed} 条；可拉取服务器快照核对最新库存` };
+    } catch (error) {
+      return { ok: false, pushed, msg: `已推送 ${pushed} 条；剩余操作已保留：${error.message}` };
     }
-  }
-  return { ok: failed === 0, msg: `推送完成：成功 ${pushed} 条` + (failed ? `，失败 ${failed} 条（${failMsg}）` : ''), pushed };
+  });
 }
 
-// 从服务器拉取全量快照覆盖本地
 async function syncPullSnapshot() {
-  const base = resolveSyncBase(DataLayer.serverUrl);
-  if (!base) return { ok: false, msg: '请先填写服务器地址' };
-  try {
-    let res, data;
-    if (isNativeHttpAvailable()) {
-      res = await nativeRequest('GET', base + '/api/backup');
-      data = await res.json();
-    } else {
-      res = await fetch(base + '/api/backup');
-      if (!res.ok) return { ok: false, msg: `拉取失败 (HTTP ${res.status})` };
-      data = await res.json();
-    }
-    if (!data.materials || !data.materials.length) return { ok: false, msg: '服务器上没有物料数据' };
-    if (!data.materials || !data.materials.length) return { ok: false, msg: '服务器上没有物料数据' };
-    await LocalAPI.restoreSnapshot(data);
-    return { ok: true, msg: `拉取成功：${data.materials.length} 款物料 / ${(data.locations || []).length} 个库位 / ${(data.stock_logs || []).length} 条流水` };
-  } catch (e) {
-    return { ok: false, msg: '拉取失败：' + (e.message || '网络不可达') + '。请确认手机连的是家里 WiFi，且地址为 http://…:8088' };
-  }
+  return withSyncLock(async () => {
+    try {
+      const base = syncBase();
+      if (!base) throw new Error('请先填写服务器地址');
+      if (await LocalDB.count('pending_ops')) throw new Error('尚有未推送操作，请先推送或导出备份处理冲突');
+      const res = await serverRequest(base, '/api/backup');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      await LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'], async db => {
+        // A stock operation may have arrived while the HTTP request was in flight.
+        if (await db.count('pending_ops')) throw new Error('拉取期间产生了新操作，已取消覆盖');
+        await createLocalAPI(db).restoreSnapshot(data);
+        await db.put('meta', { key: 'sync_server', value: base });
+      });
+      return { ok: true, msg: `拉取成功：${data.materials.length} 款物料 / ${(data.stock_logs || []).length} 条流水` };
+    } catch (error) { return { ok: false, msg: '拉取失败：' + error.message }; }
+  });
 }
 
 async function syncPendingCount() {

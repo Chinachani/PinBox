@@ -74,15 +74,17 @@ function toHalfWidth(s) {
 }
 
 function parseIntSafe(s) {
-  const cleaned = toHalfWidth(s).replace(/[^0-9+\-]/g, '');
-  const n = parseInt(cleaned, 10);
-  return isNaN(n) ? NaN : n;
+  const cleaned = toHalfWidth(s);
+  if (!/^[+\-]?\d+$/.test(cleaned)) return NaN;
+  const n = Number(cleaned);
+  return Number.isInteger(n) && Math.abs(n) <= 2147483647 ? n : NaN;
 }
 
 function parseFloatSafe(s) {
-  const cleaned = toHalfWidth(s).replace(/[^0-9+.\-]/g, '');
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? NaN : n;
+  const cleaned = toHalfWidth(s);
+  if (!/^[+\-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(cleaned)) return NaN;
+  const n = Number(cleaned);
+  return Number.isFinite(n) && Math.abs(n) <= 1e12 ? n : NaN;
 }
 
 let toastTimer = null;
@@ -99,15 +101,23 @@ function showToast(msg, type = 'success', duration = 2200) {
 
 // ---------- 弹窗管理 ----------
 function openModal(id) { $(id).classList.add('show'); }
-function closeModal(id) { $(id).classList.remove('show'); }
+function closeModal(id) {
+  $(id).classList.remove('show');
+  if (id === 'confirm-modal' && confirmResolve) {
+    const resolve = confirmResolve;
+    confirmResolve = null;
+    resolve(false);
+  }
+}
 
 function closeAllModals() {
-  $$('.modal-overlay').forEach(m => m.classList.remove('show'));
+  $$('.modal-overlay').forEach(m => closeModal(m.id));
 }
 
 // 通用确认框：返回 Promise<boolean>
 let confirmResolve = null;
 function showConfirm(title, msg, okText = '确认') {
+  if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
   $('confirm-title').innerText = title;
   $('confirm-msg').innerText = msg;
   $('btn-confirm-ok').innerText = okText;
@@ -152,7 +162,7 @@ let wsReconnectTimer = null;
 let wsRefreshTimer = null;
 
 function initLiveSync() {
-  if (DataLayer.mode === 'local') return;   // 离线模式不需要
+  if (DataLayer.mode === 'local' || localStorage.getItem('wms-api-token')) return;
   try {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const base = DataLayer.mode === 'server' && DataLayer.serverUrl
@@ -270,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const urlLoc = new URLSearchParams(window.location.search).get('loc');
   const urlCode = new URLSearchParams(window.location.search).get('code');
   if (urlLoc) {
-    state.locationFilter = decodeURIComponent(urlLoc).trim();
+    state.locationFilter = urlLoc.trim();
     renderLocFilterChip();
   }
   loadMaterials();
@@ -286,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 400);
   } else if (urlCode) {
     setTimeout(() => {
-      openDetailModal(decodeURIComponent(urlCode).trim().toUpperCase());
+      openDetailModal(urlCode.trim().toUpperCase());
     }, 800);
   }
 });
@@ -398,7 +408,7 @@ async function loadStats() {
 // ---------- 3. 分类 ----------
 async function loadCategories() {
   try {
-    const res = await fetch('/api/categories');
+    const res = await api('/api/categories');
     if (!res.ok) return;
     const cats = await res.json();
     state.categories = cats;
@@ -549,7 +559,7 @@ async function loadAboutInfo() {
     }
   } catch (e) { /* 忽略 */ }
   const addr = DataLayer.serverUrl || `${location.protocol}//${location.host}`;
-  el.innerHTML = `PinBox 引脚仓 v${serverVer || APP_VERSION} · 服务器 SQLite · ${escapeHtml(addr.replace(/^https?:\/\//, ''))}`;
+  el.innerHTML = `PinBox 引脚仓 v${escapeHtml(serverVer || APP_VERSION)} · 服务器 SQLite · ${escapeHtml(addr.replace(/^https?:\/\//, ''))}`;
 }
 
 // 独立端首次使用引导：本地库为空时提醒去数据中心拉取
@@ -601,6 +611,7 @@ function renderLocFilterChip() {
 
 // ---------- 5. 物料列表 ----------
 async function loadMaterials() {
+  const requestId = ++materialsRequestId;
   const listEl = $('material-list');
   const emptyEl = $('stock-empty');
 
@@ -627,6 +638,7 @@ async function loadMaterials() {
     const res = await api(url);
     if (!res.ok) return;
     const resp = await res.json();
+    if (requestId !== materialsRequestId) return;
     const items = resp.items || [];
     state.materials = items;
     state.stockTotalPages = resp.total_pages || 1;
@@ -647,7 +659,7 @@ async function loadMaterials() {
       emptyEl.style.display = 'none';
       // 找料模式：本地检索无结果 → 规格引擎反查
       if (state.searchQuery && !state.locationFilter && !state.quickFilter && !state.activeCategory) {
-        await renderFindResults(state.searchQuery);
+        await renderFindResults(state.searchQuery, requestId);
         if (paginationEl) paginationEl.style.display = 'none';
         return;
       }
@@ -666,13 +678,15 @@ async function loadMaterials() {
 }
 
 // ---------- 找料模式渲染 ----------
-async function renderFindResults(query) {
+let materialsRequestId = 0;
+async function renderFindResults(query, requestId) {
   const listEl = $('material-list');
   const emptyEl = $('stock-empty');
   try {
     const res = await api(`/api/find?q=${encodeURIComponent(query)}`);
     if (!res.ok) { emptyEl.style.display = 'flex'; return; }
     const data = await res.json();
+    if (requestId !== materialsRequestId) return;
     if (!data.results || !data.results.length) {
       emptyEl.style.display = 'flex';
       return;
@@ -688,7 +702,7 @@ async function renderFindResults(query) {
 
     const banner = `
       <div style="grid-column: 1 / -1; background: var(--primary-light); border: 1px solid var(--primary); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12px; color: var(--primary); margin-bottom: 2px;">
-        🔍 找料引擎：本地无精确匹配，为你解读规格${specBits ? `（${specBits}）` : ''}并匹配库存 ${data.results.length} 款
+        🔍 找料引擎：本地无精确匹配，为你解读规格${specBits ? `（${escapeHtml(specBits)}）` : ''}并匹配库存 ${data.results.length} 款
       </div>`;
 
     state.materials = data.results;
@@ -701,7 +715,7 @@ async function renderFindResults(query) {
 }
 
 // ---------- 分类封装图标 ----------
-const _catIconCache = {};
+const _catIconCache = Object.create(null);
 function categoryIcon(category, extra) {
   const c = ((category || '') + ' ' + (extra || '')).toUpperCase();
   if (_catIconCache[c]) return _catIconCache[c];
@@ -876,7 +890,7 @@ async function adjustStockQuick(code, delta, opts = {}) {
     }
   }
   try {
-    const res = await api(`/api/materials/${code}/stock`, {
+    const res = await api(`/api/materials/${encodeURIComponent(code)}/stock`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -891,6 +905,9 @@ async function adjustStockQuick(code, delta, opts = {}) {
       showToast(result.detail || '调整失败', 'error');
       return { ok: false, error: result.detail };
     }
+
+    const cached = state.materials.find(m => m.code === code);
+    if (cached) cached.quantity = result.current;
 
     const valEl = $(`stock-val-${code}`);
     if (valEl) {
@@ -1022,7 +1039,7 @@ function initScanner() {
       const res = await api('/api/scan-image', { method: 'POST', body: formData });
       const data = await res.json();
       if (data.decoded) {
-        handleScanResultData(data);
+        await handleScanText(data.raw_text);
       } else if (data.detail && data.detail.includes('离线')) {
         showToast(data.detail, 'error', 3200);
       } else {
@@ -1087,12 +1104,14 @@ function initScanner() {
   // 结果卡出入库
   $('btn-res-minus').addEventListener('click', () => {
     if (!state.lastScan || !state.lastScan.material) return;
-    const count = parseIntSafe($('res-custom-qty').value) || 1;
+    const count = parseIntSafe($('res-custom-qty').value);
+    if (!Number.isInteger(count) || count <= 0) { showToast('请输入有效的正整数数量', 'error'); return; }
     adjustStockQuick(state.lastScan.material.code, -Math.abs(count));
   });
   $('btn-res-plus').addEventListener('click', () => {
     if (!state.lastScan || !state.lastScan.material) return;
-    const count = parseIntSafe($('res-custom-qty').value) || 1;
+    const count = parseIntSafe($('res-custom-qty').value);
+    if (!Number.isInteger(count) || count <= 0) { showToast('请输入有效的正整数数量', 'error'); return; }
     adjustStockQuick(state.lastScan.material.code, Math.abs(count));
   });
   $('btn-res-detail').addEventListener('click', () => {
@@ -1131,8 +1150,8 @@ async function startCamera() {
       {
         fps: 10,
         // 识别区取画面短边 62% 的正方形：二维码占框更满，远距离小码更容易命中
-        qrbox: (vf) => {
-          const s = Math.round(Math.min(vf.width, vf.height) * 0.62);
+        qrbox: (width, height) => {
+          const s = Math.round(Math.min(width, height) * 0.62);
           return { width: s, height: s };
         },
         // 视觉取景框同步缩小到 62%（CSS 用 176px 固定值，这里用变量对齐）
@@ -1184,12 +1203,16 @@ function gotoLocationFilter(locName) {
   state.searchQuery = '';
   $('search-input').value = '';
   state.quickFilter = '';
+  state.activeCategory = '';
+  syncCatDropdownText();
   $$('#quick-filters .qfilter').forEach(b => b.classList.toggle('active', b.dataset.filter === ''));
   state.stockPage = 1;
   renderLocFilterChip();
   loadMaterials();
 }
 
+const recentBatchScans = new Map();
+const scanRequests = new Set();
 async function handleScanText(rawText) {
   const text = (rawText || '').trim();
   if (!text) return;
@@ -1197,7 +1220,9 @@ async function handleScanText(rawText) {
   // 库位标签：完整 URL 带 ?loc= 参数（打印标签上的二维码内容，手机相机可直接扫）
   let locMatch = text.match(/[?&]loc=([^&\s]+)/);
   if (locMatch) {
-    const locName = decodeURIComponent(locMatch[1]);
+    let locName;
+    try { locName = decodeURIComponent(locMatch[1]); }
+    catch { showToast('库位标签编码无效', 'error'); return; }
     gotoLocationFilter(locName);
     return;
   }
@@ -1209,6 +1234,12 @@ async function handleScanText(rawText) {
     return;
   }
 
+  const key = state.scanMode + ':' + text;
+  if (scanRequests.has(key)) return;
+  if (state.scanMode !== 'normal' && Date.now() - (recentBatchScans.get(key) || 0) < 10000) return;
+  scanRequests.add(key);
+  if (state.scanMode !== 'normal') recentBatchScans.set(key, Date.now());
+  for (const [k, ts] of recentBatchScans) if (Date.now() - ts > 10000) recentBatchScans.delete(k);
   try {
     const res = await api('/api/scan', {
       method: 'POST',
@@ -1216,13 +1247,15 @@ async function handleScanText(rawText) {
       body: JSON.stringify({ text })
     });
     const data = await res.json();
-    handleScanResultData(data);
+    if (!res.ok) throw new Error(data.detail || '解析失败');
+    if (await handleScanResultData(data) === false) recentBatchScans.delete(key);
   } catch (e) {
+    recentBatchScans.delete(key);
     showToast('解析请求失败', 'error');
-  }
+  } finally { scanRequests.delete(key); }
 }
 
-function handleScanResultData(data) {
+async function handleScanResultData(data) {
   state.lastScan = data;
   const foundCard = $('scan-result-card');
   const newCard = $('scan-new-card');
@@ -1264,9 +1297,13 @@ function handleScanResultData(data) {
     showToast(`已识别: ${it.code} (${it.model})`, 'success', 1600);
     // 连续模式：识别即按标签数量自动出入库
     if (state.scanMode !== 'normal') {
-      const qty = (data.parsed && data.parsed.quantity) || 1;
+      const qty = data.parsed?.quantity;
+      if (!Number.isInteger(qty) || qty <= 0) {
+        showToast('标签缺少有效数量，请用普通模式核对后出入库', 'error');
+        return false;
+      }
       const delta = state.scanMode === 'in' ? Math.abs(qty) : -Math.abs(qty);
-      autoBatchStock(it.code, delta, it);
+      return (await autoBatchStock(it.code, delta, it)).ok;
     }
   } else if (data.parsed && data.parsed.code) {
     $('new-code').innerText = data.parsed.code;
@@ -1301,6 +1338,7 @@ async function autoBatchStock(code, delta, material) {
     addBatchRecord({ code, model: material ? material.model : '', delta, ok: false, error: r.error });
   }
   updateBatchSessionBar();
+  return r;
 }
 
 // 逐笔记录：新记录插最上面，保留全部历史
@@ -1387,7 +1425,7 @@ function initBarcodeGunListener() {
   document.addEventListener('keydown', (e) => {
     const active = document.activeElement;
     const isInput = ['INPUT', 'TEXTAREA'].includes(active.tagName);
-    if (isInput && active.id !== 'manual-code-input') return;
+    if (isInput || active.isContentEditable || e.ctrlKey || e.altKey || e.metaKey) return;
 
     const now = Date.now();
     if (now - lastTime > 150) buffer = '';
@@ -1417,7 +1455,7 @@ async function loadLocations(silent = false) {
     const dl = $('loc-datalist');
     if (dl) {
       dl.innerHTML = locs
-        .filter(l => l.name !== '未分配库位')
+        .filter(l => !l.unassigned)
         .map(l => `<option value="${escapeHtml(l.name)}">`).join('');
     }
   } catch (e) {
@@ -1530,7 +1568,9 @@ function deleteLocationFlow(loc) {
 
 // ---------- 11. 库位归位弹窗（单个/批量） ----------
 async function openLocAssignSingle(code) {
-  const item = state.materials.find(m => m.code === code) || state.lastScan?.material;
+  const item = state.materials.find(m => m.code === code)
+    || (state.currentDetail?.code === code ? state.currentDetail : null)
+    || (state.lastScan?.material?.code === code ? state.lastScan.material : null);
   if (!item) return;
   state.locAssignContext = { type: 'single', code };
   $('loc-modal-title').innerText = '物料归位设置';
@@ -1560,9 +1600,7 @@ async function openLocModalBatch() {
 async function fillQuickLocTags() {
   if (!state.locations.length) await loadLocations(true);
   const container = $('quick-loc-tags');
-  const existingLocs = (state.locations || [])
-    .map(l => l.name)
-    .filter(name => name && name !== '未分配库位');
+  const existingLocs = (state.locations || []).filter(l => !l.unassigned).map(l => l.name).filter(Boolean);
 
   if (existingLocs.length > 0) {
     container.innerHTML = existingLocs.map(t =>
@@ -1583,7 +1621,7 @@ function initModals() {
   // 点击遮罩关闭
   $$('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.classList.remove('show');
+      if (e.target === overlay) closeModal(overlay.id);
     });
   });
 
@@ -1603,8 +1641,10 @@ function initModals() {
     if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
   });
   $('btn-confirm-ok').addEventListener('click', () => {
+    const resolve = confirmResolve;
+    confirmResolve = null;
     closeModal('confirm-modal');
-    if (confirmResolve) { confirmResolve(true); confirmResolve = null; }
+    if (resolve) resolve(true);
   });
 
   // 保存归位
@@ -1636,7 +1676,7 @@ function initModals() {
     const ok = await showConfirm('删除物料', `确定删除 ${code} 吗？其出入库流水将一并删除，且不可恢复！`, '删除');
     if (!ok) return;
     try {
-      const res = await api(`/api/materials/${code}`, { method: 'DELETE' });
+      const res = await api(`/api/materials/${encodeURIComponent(code)}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) {
         showToast(data.message || '已删除', 'success');
@@ -1714,7 +1754,7 @@ function initModals() {
     }
     const code = state.currentDetail.code;
     try {
-      const res = await api(`/api/materials/${code}`, {
+      const res = await api(`/api/materials/${encodeURIComponent(code)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ price: priceVal })
@@ -1805,7 +1845,7 @@ async function saveLocationAssign() {
   try {
     let res;
     if (ctx.type === 'single') {
-      res = await api(`/api/materials/${ctx.code}`, {
+      res = await api(`/api/materials/${encodeURIComponent(ctx.code)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ location: newLoc })
@@ -1934,17 +1974,27 @@ async function submitMaterialForm(e) {
     use_case: $('mf-use').value.trim(),
     remark: $('mf-remark').value.trim()
   };
+  const quantity = parseIntSafe($('mf-quantity').value || '0');
+  const minStock = parseIntSafe($('mf-min-stock').value || '0');
+  const price = parseFloatSafe($('mf-price').value || '0');
+  if (!Number.isInteger(minStock) || minStock < 0 || !Number.isFinite(price) || price < 0
+      || (!state.editingMaterialCode && (!Number.isInteger(quantity) || quantity < 0))) {
+    showToast('数量与预警线须为非负整数，单价须为非负数', 'error');
+    return;
+  }
+  payload.price = price;
+  payload.min_stock = minStock;
 
   try {
     let res;
     if (state.editingMaterialCode) {
-      res = await api(`/api/materials/${state.editingMaterialCode}`, {
+      res = await api(`/api/materials/${encodeURIComponent(state.editingMaterialCode)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
     } else {
-      payload.quantity = parseIntSafe($('mf-quantity').value) || 0;
+      payload.quantity = quantity;
       payload.batch = '手动建档';
       res = await api('/api/materials', {
         method: 'POST',
@@ -1983,7 +2033,7 @@ async function submitMaterialForm(e) {
 // ---------- 14. 详情弹窗 ----------
 async function openDetailModal(code) {
   try {
-    const res = await api(`/api/materials/${code}`);
+    const res = await api(`/api/materials/${encodeURIComponent(code)}`);
     if (!res.ok) { showToast('获取详情失败', 'error'); return; }
     const it = await res.json();
     state.currentDetail = it;
@@ -1994,7 +2044,7 @@ async function openDetailModal(code) {
     locEl.className = 'card-location ' + (it.location ? 'assigned' : 'unassigned');
     $('detail-title').innerText = it.model;
     const lcscLink = $('detail-lcsc-link');
-    if (lcscLink) lcscLink.href = `https://so.szlcsc.com/global.html?k=${it.code}`;
+    if (lcscLink) lcscLink.href = `https://so.szlcsc.com/global.html?k=${encodeURIComponent(it.code)}`;
     const projInput = $('detail-project-input');
     if (projInput) projInput.value = '';
 
@@ -2019,7 +2069,7 @@ async function openDetailModal(code) {
       logsEl.innerHTML = it.logs.map(l => `
         <div class="detail-log-row">
           <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(l.reason || '变动')}${l.project ? ' · 📦 ' + escapeHtml(l.project) : ''} <b class="detail-log-delta ${l.delta > 0 ? 'in' : (l.delta < 0 ? 'out' : 'neutral')}">(${l.delta > 0 ? '+' : ''}${l.delta})</b></span>
-          <span style="color: var(--muted); flex-shrink: 0;">${formatTime(l.created_at)}</span>
+          <span style="color: var(--muted); flex-shrink: 0;">${escapeHtml(formatTime(l.created_at))}</span>
         </div>
       `).join('');
     } else {
@@ -2035,7 +2085,7 @@ async function openDetailModal(code) {
 // ---------- 15. 标签打印 ----------
 function qrSvgTag(text) {
   // 中文必须走 UTF-8 字节模式，否则扫出乱码
-  qrcode.stringToBytesFuncs['UTF-8'];
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
   const qr = qrcode(0, 'M');
   qr.addData(text, 'Byte');
   qr.make();
@@ -2044,9 +2094,8 @@ function qrSvgTag(text) {
 
 // 库位二维码内容：完整 URL（手机相机扫码直接打开 App 并筛选该收纳盒）
 function locQrText(locName) {
-  const base = DataLayer.mode === 'server' && DataLayer.serverUrl
-    ? DataLayer.serverUrl
-    : window.location.origin;
+  const base = DataLayer.serverUrl || (isNativeHttpAvailable() ? '' : window.location.origin);
+  if (!base) return 'LOC:' + locName;
   return `${base}/?loc=${encodeURIComponent(locName)}`;
 }
 
@@ -2357,7 +2406,7 @@ async function loadRecentLogs(page = 1) {
       <div class="log-item">
         <div class="log-item-main">
           <div class="log-item-title"><span class="log-code">${escapeHtml(l.material_code)}</span> · ${escapeHtml(l.model || '')}</div>
-          <div class="log-item-sub">${escapeHtml(l.reason || '变动')}${l.project ? ' · 📦 ' + escapeHtml(l.project) : ''} · 现存 ${l.remaining}${escapeHtml(l.unit || '个')} · ${formatTime(l.created_at)}</div>
+          <div class="log-item-sub">${escapeHtml(l.reason || '变动')}${l.project ? ' · 📦 ' + escapeHtml(l.project) : ''} · 现存 ${l.remaining}${escapeHtml(l.unit || '个')} · ${escapeHtml(formatTime(l.created_at))}</div>
         </div>
         <div class="log-item-delta ${deltaClass}">${deltaText}</div>
       </div>
@@ -2564,6 +2613,7 @@ function renderBomResults(items) {
       if (chosen) {
         item.matched_code = chosen.code;
         item.matched_model = chosen.model;
+        item.matched_brand = chosen.brand;
         item.matched_price = chosen.price;
         item.stock_qty = chosen.quantity;
         item.shortfall = Math.max(0, item.qty - chosen.quantity);
@@ -2572,18 +2622,16 @@ function renderBomResults(items) {
       } else {
         item.matched_code = null;
         item.matched_model = null;
+        item.matched_brand = null;
         item.matched_price = 0;
         item.stock_qty = 0;
         item.shortfall = item.qty;
         item.status = 'none';
       }
-      const tr = sel.closest('tr');
-      tr.className = `row-${item.status}`;
-      tr.querySelector('.bom-status').className = `bom-status ${item.status}`;
-      tr.querySelector('.bom-status').innerText = { ok: '✓ 够用', insufficient: `⚠ 缺 ${item.shortfall}`, none: '✗ 未找到' }[item.status];
-      $(`bom-subtotal-${idx}`).innerText = item.matched_price > 0 ? `￥${fmtMoney(item.matched_price * item.qty)}` : '-';
+      allocateBomStock(state.bomState.items);
       state.bomState.summary = bomSummarize(state.bomState.items);
       renderBomSummary(state.bomState.summary);
+      renderBomResults(state.bomState.items);
     });
   });
 
@@ -2622,6 +2670,7 @@ async function exportBomOrderExcel() {
   try {
     const res = await api('/api/bom/order-excel', {
       method: 'POST',
+      responseType: 'blob',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: state.bomState.items })
     });
@@ -2659,7 +2708,7 @@ function exportBomCsv() {
   const s = state.bomState.summary;
   rows.push([]);
   rows.push(['合计', '', '', '', '', '', `命中${s.ok + s.insufficient}/${s.lines}`, `缺料成本￥${s.shortfall_cost}`, '', `总成本￥${s.total_cost}`]);
-  const csv = '\ufeff' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = '\ufeff' + rows.map(r => r.map(csvCell).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -2760,17 +2809,17 @@ function initModeUI() {
 
   $('input-server-url').value = DataLayer.serverUrl || '';
   $('btn-sync-test').onclick = async () => {
-    DataLayer.setServerUrl($('input-server-url').value);
+    if (!saveServerSettings()) return;
     const r = await syncTestConnection();
     setSyncStatus(r.msg, r.ok);
   };
   $('btn-sync-pull').onclick = async () => {
-    DataLayer.setServerUrl($('input-server-url').value);
+    if (!saveServerSettings()) return;
     if (DataLayer.mode === 'server') {
       setSyncStatus('当前已是服务器模式，无需拉取', false);
       return;
     }
-    const ok = await showConfirm('从服务器拉取', '将用服务器数据【覆盖】本机离线库，未推送的离线变更会被清除！建议先推送。继续？', '拉取');
+    const ok = await showConfirm('从服务器拉取', '将用服务器数据覆盖本机离线库。有未推送操作时会取消拉取，请先推送或导出备份处理冲突。继续？', '拉取');
     if (!ok) return;
     setSyncStatus('正在拉取…', true);
     const r = await syncPullSnapshot();
@@ -2781,13 +2830,27 @@ function initModeUI() {
     }
   };
   $('btn-sync-push').onclick = async () => {
-    DataLayer.setServerUrl($('input-server-url').value);
+    if (!saveServerSettings()) return;
     setSyncStatus('正在推送离线变更…', true);
     const r = await syncPushOps();
     setSyncStatus(r.msg, r.ok);
     updatePendingCount();
   };
   updatePendingCount();
+  $('input-api-token').value = localStorage.getItem('wms-api-token') || '';
+}
+
+function saveServerSettings() {
+  try {
+    DataLayer.setServerUrl($('input-server-url').value);
+    const token = $('input-api-token').value.trim();
+    if (token) localStorage.setItem('wms-api-token', token);
+    else localStorage.removeItem('wms-api-token');
+    return true;
+  } catch (error) {
+    setSyncStatus(error.message, false);
+    return false;
+  }
 }
 
 function setSyncStatus(msg, ok) {
@@ -2805,31 +2868,38 @@ async function updatePendingCount() {
 }
 
 function bindLocalExports() {
-  const excelLink = $('a-export-excel');
-  const csvLink = $('a-export-csv');
-  if (DataLayer.mode !== 'local' && excelLink) {
-    excelLink.addEventListener('click', (e) => {
-      // 保持 <a> 默认下载，仅提示
-      showToast('正在生成 Excel 报表…', 'info', 1600);
+  for (const [id, path, name, mime] of [
+    ['a-export-excel', '/api/export/excel', 'pinbox_inventory.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    ['a-export-csv', '/api/export?format=csv', 'pinbox_inventory.csv', 'text/csv'],
+    ['a-export-json', '/api/backup', 'pinbox_backup.json', 'application/json']
+  ]) {
+    $(id)?.addEventListener('click', async event => {
+      event.preventDefault();
+      if (DataLayer.mode === 'local' && id === 'a-export-excel') {
+        showToast('离线模式请使用 CSV 报表或 JSON 备份', 'info');
+        return;
+      }
+      try {
+        const res = await api(path, { responseType: 'blob' });
+        if (!res.ok) throw new Error((await res.json()).detail || '导出失败');
+        if (DataLayer.mode === 'local') {
+          const data = await res.json();
+          if (id === 'a-export-json') downloadBlob(JSON.stringify(data, null, 1), name, mime);
+          else {
+            const fields = ['code', 'category', 'brand', 'model', 'package', 'quantity', 'unit', 'price', 'location', 'use_case', 'batch', 'order_date', 'min_stock', 'remark'];
+            const rows = [fields, ...data.materials.map(m => fields.map(f => m[f] ?? ''))];
+            downloadBlob('\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\n'), name, mime);
+          }
+        } else downloadBlob(await res.blob(), name, mime);
+      } catch (error) { showToast(error.message || '导出失败', 'error'); }
     });
   }
-  const jsonLink = $('a-export-json');
-  if (DataLayer.mode !== 'local') return;
-  if (csvLink) csvLink.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const res = await api('/api/export?format=csv');
-    const data = await res.json();
-    const mats = data.materials || [];
-    const headers = ['code','category','brand','model','package','quantity','unit','price','location','use_case','batch','min_stock','remark'];
-    const rows = [headers.join(',')].concat(mats.map(m => headers.map(h => `"${String(m[h] ?? '').replace(/"/g, '""')}"`).join(',')));
-    downloadBlob('\ufeff' + rows.join('\n'), `lcsc_inventory_${new Date().toISOString().slice(0,10)}.csv`, 'text/csv');
-  });
-  if (jsonLink) jsonLink.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const res = await api('/api/backup');
-    const data = await res.json();
-    downloadBlob(JSON.stringify(data, null, 1), `lcsc_backup_${new Date().toISOString().slice(0,16).replace(/[:T]/g,'')}.json`, 'application/json');
-  });
+}
+
+function csvCell(value) {
+  let text = String(value ?? '');
+  if (typeof value === 'string' && /^[=+@\-\t\r]/.test(text)) text = "'" + text;
+  return '"' + text.replace(/"/g, '""') + '"';
 }
 
 function downloadBlob(content, filename, mime) {

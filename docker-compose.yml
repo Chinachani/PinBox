@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   lcsc-stock-mobile:
     build: .
@@ -17,3 +15,5 @@ services:
     command: ["python", "backend/main.py"]
     environment:
       - TZ=Asia/Shanghai
+      - PINBOX_API_TOKEN=${PINBOX_API_TOKEN:-}
+      - PINBOX_ALLOWED_ORIGINS=${PINBOX_ALLOWED_ORIGINS:-}

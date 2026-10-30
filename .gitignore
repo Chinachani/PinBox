@@ -60,3 +60,10 @@ android/.gradle/
 android/build/
 *.apk
 *.aab
+*.keystore
+android/signing.properties
+data/backups/
+.pytest_cache/
+test-results/
+playwright-report/
+/*.spec

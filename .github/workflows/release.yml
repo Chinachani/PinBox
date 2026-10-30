@@ -6,16 +6,39 @@ on:
       - 'v*'
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  validate:
+    name: Inventory Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: pip install -r backend/requirements.txt pytest httpx
+      - run: npm ci
+      - run: python -m pytest tests/test_inventory.py -q
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: npm audit --audit-level=high
+
   # =========================================================================
   # 1. 编译 Windows 独立版程序 (PinBox.exe)
   # =========================================================================
   build-windows:
+    if: github.event_name != 'pull_request'
+    needs: validate
     name: Build Windows EXE
     runs-on: windows-latest
     steps:
@@ -39,6 +62,8 @@ jobs:
             --name "PinBox" `
             --icon "frontend/icons/icon-512.png" `
             --add-data "frontend;frontend" `
+            --add-data "package.json;." `
+            --collect-submodules "uvicorn" `
             --hidden-import "uvicorn" `
             --hidden-import "fastapi" `
             --hidden-import "openpyxl" `
@@ -61,6 +86,8 @@ jobs:
   # 2. 编译 Linux 原生通用安装包 (pinbox_1.0.0_amd64.deb)
   # =========================================================================
   build-linux:
+    if: github.event_name != 'pull_request'
+    needs: validate
     name: Build Linux DEB
     runs-on: ubuntu-latest
     steps:
@@ -85,6 +112,8 @@ jobs:
           pyinstaller --noconfirm --onedir --windowed \
             --name "pinbox" \
             --add-data "frontend:frontend" \
+            --add-data "package.json:." \
+            --collect-submodules "uvicorn" \
             --hidden-import "uvicorn" \
             --hidden-import "fastapi" \
             --hidden-import "openpyxl" \
@@ -142,6 +171,8 @@ jobs:
   # 3. 编译 Android 原生单机安装包 (PinBox.apk)
   # =========================================================================
   build-android:
+    if: github.event_name != 'pull_request'
+    needs: validate
     name: Build Android APK
     runs-on: ubuntu-latest
     steps:
@@ -161,13 +192,26 @@ jobs:
 
       - name: Install NPM Dependencies & Sync Web Assets
         run: |
-          npm install
+          npm ci
           npx cap sync android
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x android/gradlew
 
+      - name: Restore Private Signing Key
+        env:
+          PINBOX_SIGNING_KEYSTORE: ${{ secrets.PINBOX_SIGNING_KEYSTORE }}
+        run: |
+          test -n "$PINBOX_SIGNING_KEYSTORE" || { echo "Configure PINBOX_SIGNING_KEYSTORE and signing password secrets"; exit 1; }
+          printf '%s' "$PINBOX_SIGNING_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/pinbox-release.keystore"
+          chmod 600 "$RUNNER_TEMP/pinbox-release.keystore"
+
       - name: Build Android Release APK
+        env:
+          PINBOX_KEYSTORE: ${{ runner.temp }}/pinbox-release.keystore
+          PINBOX_STORE_PASSWORD: ${{ secrets.PINBOX_STORE_PASSWORD }}
+          PINBOX_KEY_ALIAS: ${{ secrets.PINBOX_KEY_ALIAS }}
+          PINBOX_KEY_PASSWORD: ${{ secrets.PINBOX_KEY_PASSWORD }}
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
@@ -198,6 +242,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
@@ -241,7 +287,7 @@ jobs:
           if [ -n "$LAST_TAG" ]; then
             RANGE="${LAST_TAG}..HEAD"
           else
-            RANGE="HEAD~20..HEAD"
+            RANGE="HEAD"
           fi
           LOG=$(git log "$RANGE" --pretty=format:"- %s (%h)" | grep -v '^\- ci:' | head -30 || true)
           if [ -z "$LOG" ]; then
@@ -260,6 +306,7 @@ jobs:
           name: "PinBox 引脚仓 ${{ steps.reltag.outputs.tag }}"
           draft: false
           prerelease: false
+          target_commitish: ${{ github.sha }}
           body: |
             ## 📦 自动发布
 

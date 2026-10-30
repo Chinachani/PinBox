@@ -6,16 +6,39 @@ on:
       - 'v*'
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  validate:
+    name: Inventory Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: pip install -r backend/requirements.txt pytest httpx
+      - run: npm ci
+      - run: python -m pytest tests/test_inventory.py -q
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: npm audit --audit-level=high
+
   # =========================================================================
   # 1. 编译 Windows 独立版程序 (PinBox.exe)
   # =========================================================================
   build-windows:
+    if: github.event_name != 'pull_request'
+    needs: validate
     name: Build Windows EXE
     runs-on: windows-latest
     steps:
@@ -28,28 +51,28 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python Dependencies
-        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install pyinstaller
 
       - name: Build Standalone Windows EXE
-        shell: bash
         run: |
-          pyinstaller --noconfirm --onedir --windowed \
-            --name "PinBox" \
-            --add-data "frontend;frontend" \
-            --hidden-import "uvicorn" \
-            --hidden-import "fastapi" \
-            --hidden-import "openpyxl" \
-            --hidden-import "xlrd" \
-            --hidden-import "zxingcpp" \
-            --hidden-import "PIL" \
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "PinBox" `
+            --icon "frontend/icons/icon-512.png" `
+            --add-data "frontend;frontend" `
+            --add-data "package.json;." `
+            --collect-submodules "uvicorn" `
+            --hidden-import "uvicorn" `
+            --hidden-import "fastapi" `
+            --hidden-import "openpyxl" `
+            --hidden-import "xlrd" `
+            --hidden-import "zxingcpp" `
+            --hidden-import "PIL" `
             backend/main.py
 
       - name: Archive Windows Artifact
-        shell: pwsh
         run: |
           Compress-Archive -Path dist/PinBox/* -DestinationPath dist/PinBox-Windows-x64.zip
 
@@ -63,6 +86,8 @@ jobs:
   # 2. 编译 Linux 原生通用安装包 (pinbox_1.0.0_amd64.deb)
   # =========================================================================
   build-linux:
+    if: github.event_name != 'pull_request'
+    needs: validate
     name: Build Linux DEB
     runs-on: ubuntu-latest
     steps:
@@ -87,6 +112,8 @@ jobs:
           pyinstaller --noconfirm --onedir --windowed \
             --name "pinbox" \
             --add-data "frontend:frontend" \
+            --add-data "package.json:." \
+            --collect-submodules "uvicorn" \
             --hidden-import "uvicorn" \
             --hidden-import "fastapi" \
             --hidden-import "openpyxl" \
@@ -94,6 +121,10 @@ jobs:
             --hidden-import "zxingcpp" \
             --hidden-import "PIL" \
             backend/main.py
+
+      - name: Read Version
+        id: ver
+        run: echo "v=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")" >> "$GITHUB_OUTPUT"
 
       - name: Package Debian (.deb)
         run: |
@@ -120,7 +151,7 @@ jobs:
 
           cat << 'EOF' > deb-pkg/DEBIAN/control
           Package: pinbox
-          Version: 1.0.0
+          Version: ${{ steps.ver.outputs.v }}
           Section: utils
           Priority: optional
           Architecture: amd64
@@ -128,18 +159,20 @@ jobs:
           Description: PinBox - Smart Electronics Inventory & BOM Manager
           EOF
 
-          dpkg-deb --build deb-pkg dist/pinbox_1.0.0_amd64.deb
+          dpkg-deb --build deb-pkg dist/pinbox_${{ steps.ver.outputs.v }}_amd64.deb
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PinBox-Linux-deb
-          path: dist/pinbox_1.0.0_amd64.deb
+          path: dist/pinbox_${{ steps.ver.outputs.v }}_amd64.deb
 
   # =========================================================================
   # 3. 编译 Android 原生单机安装包 (PinBox.apk)
   # =========================================================================
   build-android:
+    if: github.event_name != 'pull_request'
+    needs: validate
     name: Build Android APK
     runs-on: ubuntu-latest
     steps:
@@ -159,36 +192,59 @@ jobs:
 
       - name: Install NPM Dependencies & Sync Web Assets
         run: |
-          npm install
+          npm ci
           npx cap sync android
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x android/gradlew
 
+      - name: Restore Private Signing Key
+        env:
+          PINBOX_SIGNING_KEYSTORE: ${{ secrets.PINBOX_SIGNING_KEYSTORE }}
+        run: |
+          test -n "$PINBOX_SIGNING_KEYSTORE" || { echo "Configure PINBOX_SIGNING_KEYSTORE and signing password secrets"; exit 1; }
+          printf '%s' "$PINBOX_SIGNING_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/pinbox-release.keystore"
+          chmod 600 "$RUNNER_TEMP/pinbox-release.keystore"
+
       - name: Build Android Release APK
+        env:
+          PINBOX_KEYSTORE: ${{ runner.temp }}/pinbox-release.keystore
+          PINBOX_STORE_PASSWORD: ${{ secrets.PINBOX_STORE_PASSWORD }}
+          PINBOX_KEY_ALIAS: ${{ secrets.PINBOX_KEY_ALIAS }}
+          PINBOX_KEY_PASSWORD: ${{ secrets.PINBOX_KEY_PASSWORD }}
         run: |
           cd android
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Read Version (Android)
+        id: ver
+        run: echo "v=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")" >> "$GITHUB_OUTPUT"
 
       - name: Rename and Prepare APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/PinBox-v1.0.0.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/PinBox-v${{ steps.ver.outputs.v }}.apk
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PinBox-Android-APK
-          path: dist/PinBox-v1.0.0.apk
+          path: dist/PinBox-v${{ steps.ver.outputs.v }}.apk
 
   # =========================================================================
-  # 4. 发布 GitHub Release（当推送 v* Tag 或无论 main 分支还是手动触发）
+  # 4. 发布 GitHub Release（当推送 v* Tag 或手动触发时）
   # =========================================================================
   publish-release:
     name: Publish Release Packages
     needs: [build-windows, build-linux, build-android]
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
         with:
@@ -207,15 +263,61 @@ jobs:
           name: PinBox-Android-APK
           path: release-assets
 
-      - name: Create or Update GitHub Release
+      - name: Compute Release Tag
+        id: reltag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            # Release 版本号与产品版本号（package.json）严格同步，不再自动 +1。
+            # 发版前先 bump package.json；同版本重复推送时 action-gh-release 会原地更新 Release 资产。
+            VER=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
+            echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate Changelog from Commits
+        id: changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 上一个正式 release 的 tag 之后的所有 commit（排除 ci: 提交）
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          LOG=$(git log "$RANGE" --pretty=format:"- %s (%h)" | grep -v '^\- ci:' | head -30 || true)
+          if [ -z "$LOG" ]; then
+            LOG="- 常规维护与依赖更新"
+          fi
+          {
+            echo "log<<CHANGELOG_EOF"
+            echo "$LOG"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: 'v1.0.0'
-          name: 'PinBox 引脚仓 Release v1.0.0'
+          tag_name: ${{ steps.reltag.outputs.tag }}
+          name: "PinBox 引脚仓 ${{ steps.reltag.outputs.tag }}"
           draft: false
           prerelease: false
-          generate_release_notes: true
+          target_commitish: ${{ github.sha }}
+          body: |
+            ## 📦 自动发布
+
+            ${{ steps.changelog.outputs.log }}
+
+            **安装包说明**
+            - `PinBox-*.apk` — Android 原生客户端（系统 WebView 渲染，包体小是正常特性）
+            - `PinBox-Windows-x64.zip` — Windows 绿色版
+            - `pinbox_*_amd64.deb` — Linux Debian/Ubuntu 安装包
+          generate_release_notes: false
           files: |
             release-assets/PinBox-Windows-x64.zip
-            release-assets/pinbox_1.0.0_amd64.deb
-            release-assets/PinBox-v1.0.0.apk
+            release-assets/pinbox_*_amd64.deb
+            release-assets/PinBox-v*.apk
