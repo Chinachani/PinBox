@@ -5,6 +5,8 @@ WORKDIR /app
 # 设置时区和语言环境
 ENV TZ=Asia/Shanghai
 ENV PYTHONUNBUFFERED=1
+ENV PINBOX_DEPLOYMENT_MODE=shared
+ENV PINBOX_HOST=0.0.0.0
 
 COPY backend/requirements.lock /app/backend/requirements.lock
 RUN python -m pip install --no-cache-dir --upgrade pip==26.2.2 setuptools==84.2.1 \

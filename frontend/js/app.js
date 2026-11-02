@@ -123,6 +123,8 @@ document.addEventListener('keydown', e => {
   else if (!e.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
 });
 function closeModal(id) {
+  if (id === 'setup-wizard-modal' && Setup.required) return;
+  if (id === 'setup-wizard-modal') Setup.cancel();
   if (id === 'detail-modal') state.detailRequestId++;
   const wasOpen = $(id).classList.contains('show');
   $(id).classList.remove('show');
@@ -202,7 +204,7 @@ function initLiveSync() {
   clearInterval(livePollTimer);
   if (wsConn) { wsConn.onclose = null; wsConn.close(); wsConn = null; }
   if (DataLayer.mode === 'local') return;
-  if (localStorage.getItem('wms-api-token')) {
+  if (DataLayer.token) {
     livePollTimer = setInterval(() => { if (!document.hidden) refreshLiveView(); }, 15000);
     return;
   }
@@ -286,7 +288,7 @@ function showHoverCard(codeEl) {
 }
 
 // ---------- 初始化 ----------
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
   initNav();
   initSearch();
@@ -308,6 +310,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!e.target.closest('#cat-dropdown')) toggleCatPanel(false);
   });
 
+  try {
+    if (!await Setup.initialize()) return;
+  } catch (error) {
+    $('material-list').textContent = '初始化失败，请允许本机存储后重试：' + error.message;
+    return;
+  }
+  loadRestock(); loadProjectStats(); loadBackupsInfo();
+  renderDataSource();
   loadStats();
   loadCategories();
   loadLocations(true);
@@ -324,7 +334,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMaterials();
   initLiveSync();
   initHoverCard();
-  maybeOnboard();
 
   if (urlLoc) {
     // 深链进来直接切库存视图并高亮过滤条件
@@ -369,8 +378,8 @@ function switchView(viewId) {
   const catDropdown = $('cat-dropdown');
   if (viewId === 'view-stock') {
     searchContainer.style.display = 'flex';
-    catChips.style.display = 'flex';
-    // 桌面下拉/手机横滑由 CSS 断点决定，清掉内联值即可
+    catChips.style.display = 'none';
+    // 分类统一使用工具栏内下拉入口。
     catDropdown.style.display = '';
   } else {
     // 分类筛选只属于库存页，其他视图（含桌面下拉）一并隐藏
@@ -516,6 +525,7 @@ function syncCatDropdownText() {
   const el = $('btn-cat-dd-text');
   if (!el) return;
   el.innerText = state.activeCategory ? `分类：${state.activeCategory}` : '全部分类';
+  $('btn-cat-dd').title = el.innerText;
 }
 
 function toggleCatPanel(force) {
@@ -526,6 +536,7 @@ function toggleCatPanel(force) {
   panel.classList.toggle('open', open);
   btn.setAttribute('aria-expanded', open);
   if (open) panel.querySelector('input')?.focus();
+  else if (panel.contains(document.activeElement)) btn.focus();
 }
 
 // ---------- 4. 搜索与快捷筛选 ----------
@@ -576,7 +587,7 @@ function initSearch() {
 
   // 电脑端快捷键
   document.addEventListener('keydown', (e) => {
-    if (e.key === '/' && document.activeElement !== input) {
+    if (e.key === '/' && document.activeElement !== input && !document.querySelector('.modal-overlay.show')) {
       const isInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName);
       if (!isInput) {
         e.preventDefault();
@@ -614,19 +625,6 @@ async function loadAboutInfo() {
   } catch (e) { /* 忽略 */ }
   const addr = DataLayer.serverUrl || `${location.protocol}//${location.host}`;
   el.innerHTML = `PinBox 引脚仓 v${escapeHtml(serverVer || APP_VERSION)} · 服务器 SQLite · ${escapeHtml(addr.replace(/^https?:\/\//, ''))}`;
-}
-
-// 独立端首次使用引导：本地库为空时提醒去数据中心拉取
-function maybeOnboard() {
-  if (!isStandaloneApp?.() || DataLayer.mode !== 'local') return;
-  if (localStorage.getItem('wms-onboarded')) return;
-  LocalDB.count('materials').then(n => {
-    if (n > 0) return;
-    localStorage.setItem('wms-onboarded', '1');
-    setTimeout(() => {
-      showToast('📱 独立端首次使用：本地库为空，去「管理与看板 → 桌面与系统 → 数据中心」点「从服务器拉取」', 'info', 6000);
-    }, 1500);
-  });
 }
 
 // 移动端分类横滑渐隐：滚到最右移除右缘遮罩
@@ -729,8 +727,9 @@ async function loadMaterials() {
     renderLocFilterChip();
   } catch (e) {
     if (requestId !== materialsRequestId) return;
-    listEl.innerHTML = `<div class="dash-empty" role="alert">加载失败：${escapeHtml(e.message)}<br>请检查数据中心的服务器地址与令牌。<br><button class="btn-action btn-secondary" id="btn-retry-materials">重试</button></div>`;
+    listEl.innerHTML = `<div class="dash-empty" role="alert">加载失败：${escapeHtml(e.message)}<br>请检查服务器地址与连接密钥。<br><button class="btn-action btn-secondary" id="btn-retry-materials">重试</button> <button class="btn-action btn-primary" id="btn-configure-connection">设置连接</button></div>`;
     $('btn-retry-materials').onclick = loadMaterials;
+    $('btn-configure-connection').onclick = () => Setup.open();
     emptyEl.style.display = 'none';
   }
 }
@@ -2845,9 +2844,6 @@ function initToolPanels() {
     });
   }
 
-  loadRestock();
-  loadProjectStats();
-  loadBackupsInfo();
   initModeUI();
   bindLocalExports();
 }
@@ -2861,15 +2857,14 @@ function initModeUI() {
     b.onclick = async () => {
       const target = b.dataset.mode;
       if (target === DataLayer.mode) return;
-      if (target === 'local') {
-        const ok = await showConfirm('切换到本地离线模式', '将使用本机浏览器 IndexedDB 存储数据。若本机库为空，建议先「从服务器拉取」。确定切换？', '切换');
-        if (!ok) return;
-      } else {
-        const ok = await showConfirm('切换到服务器在线模式', '将直接读写服务器数据库（当前局域网）。确定切换？', '切换');
-        if (!ok) return;
-      }
-      DataLayer.setMode(target);
-      window.location.reload();
+      try {
+        if (!await confirmDataSwitch(target === 'local' ? '切换到本机离线库' : '切换到服务器在线', target)) return;
+        if (target === 'server') {
+          const result = await syncTestConnection();
+          if (!result.ok) throw new Error(result.msg + '；请先配置连接');
+        }
+        await commitDataSettings({ mode: target });
+      } catch (error) { setSyncStatus(error.message, false); }
     };
   });
 
@@ -2940,7 +2935,7 @@ function initModeUI() {
     box.textContent = ops.length ? JSON.stringify(ops, null, 2) : '没有待推送操作';
   };
   updatePendingCount();
-  $('input-api-token').value = localStorage.getItem('wms-api-token') || '';
+  $('input-api-token').value = DataLayer.token;
   const readiness = $('offline-readiness');
   if (window.Capacitor?.isNativePlatform?.()) readiness.textContent = '原生 App：支持本地离线库；请定期导出备份。';
   else if (!window.isSecureContext) readiness.textContent = '当前 HTTP 仅为网页快捷方式，不具备 PWA 离线启动能力；请使用受信任 HTTPS 或原生 App。';
@@ -2952,7 +2947,7 @@ function initModeUI() {
 
 function requireSavedServerSettings() {
   try {
-    if (resolveSyncBase($('input-server-url').value) !== DataLayer.serverUrl || $('input-api-token').value.trim() !== (localStorage.getItem('wms-api-token') || '')) {
+    if (resolveSyncBase($('input-server-url').value) !== DataLayer.serverUrl || $('input-api-token').value.trim() !== DataLayer.token) {
       setSyncStatus('测试不会改变当前数据源；请先点「应用连接设置」', false); return false;
     }
     return true;
@@ -2961,18 +2956,37 @@ function requireSavedServerSettings() {
 async function saveServerSettings() {
   try {
     const url = resolveSyncBase($('input-server-url').value);
-    if (stockRequestBusy || syncInFlight) throw new Error('正在记账或同步，请等待操作完成再切换连接');
-    if (!await showConfirm('应用连接设置', '将重新加载页面并清除旧服务器的显示缓存，不会移动或覆盖任何库存。请确认目标地址正确。', '应用并刷新')) return;
-    DataLayer.setServerUrl(url);
     const token = $('input-api-token').value.trim();
-    if (token) localStorage.setItem('wms-api-token', token);
-    else localStorage.removeItem('wms-api-token');
-    window.location.reload();
+    if (!await confirmDataSwitch('应用连接设置', DataLayer.mode)) return;
+    const result = await syncTestConnection(url, token);
+    if (!result.ok) throw new Error(result.msg);
+    if (url !== resolveSyncBase($('input-server-url').value) || token !== $('input-api-token').value.trim()) throw new Error('设置已修改，请重新测试');
+    await commitDataSettings({ url, token });
   } catch (error) { setSyncStatus(error.message, false); }
 }
+let settingsReloadTimer;
 window.addEventListener('storage', e => {
-  if (['wms-mode', 'wms-server-url', 'wms-api-token'].includes(e.key)) window.location.reload();
+  if (!['wms-mode', 'wms-server-url', 'wms-api-token'].includes(e.key)) return;
+  clearTimeout(settingsReloadTimer);
+  const reloadWhenIdle = () => {
+    if (dataWritesInFlight || stockRequestBusy || syncInFlight) {
+      settingsReloadTimer = setTimeout(reloadWhenIdle, 200);
+      return;
+    }
+    window.location.reload();
+  };
+  settingsReloadTimer = setTimeout(reloadWhenIdle, 100);
 });
+function renderDataSource() {
+  const local = DataLayer.mode === 'local';
+  const url = DataLayer.serverUrl || (window.Capacitor?.isNativePlatform?.() ? '未配置地址' : location.origin);
+  $('current-data-badge').textContent = local ? '本机离线库' : '服务器在线';
+  $('current-data-badge').classList.toggle('local-mode', local);
+  $('current-data-badge').classList.toggle('server-mode', !local);
+  $('current-data-source').textContent = local ? '本机 IndexedDB · 与服务器是两份独立的数据' : `SQLite · ${url}`;
+  $('btn-sync-pull').disabled = !local;
+  $('pull-mode-hint').textContent = local ? '用服务器快照替换本机库；有待推送操作时禁止覆盖。' : '当前直接读写服务器，无需拉取。要准备离线库存，请先切换本机离线库。';
+}
 window.addEventListener('pinbox-local-change', () => updatePendingCount());
 
 function setSyncStatus(msg, ok) {

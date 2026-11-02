@@ -282,9 +282,9 @@ def test_api_token_and_cross_origin_write_protection(client, monkeypatch):
 def test_live_notifications_cross_client_event_loops(client):
     from fastapi.testclient import TestClient
     create(client)
-    with client.websocket_connect('/ws', headers={'origin': 'http://testserver'}) as first:
-        with TestClient(main.app) as other:
-            with other.websocket_connect('/ws', headers={'origin': 'http://testserver'}) as second:
+    with client.websocket_connect('ws://127.0.0.1/ws', headers={'origin': 'http://127.0.0.1'}) as first:
+        with TestClient(main.app, base_url="http://127.0.0.1", client=("127.0.0.1", 50001)) as other:
+            with other.websocket_connect('ws://127.0.0.1/ws', headers={'origin': 'http://127.0.0.1'}) as second:
                 assert stock(client, 'C10001', {'delta': -1}).status_code == 200
                 assert first.receive_json()['current'] == 19
                 assert second.receive_json()['current'] == 19

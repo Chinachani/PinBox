@@ -6,6 +6,7 @@ android
 data
 certs
 .env
+.env.lock
 .deployment
 docs
 tests
