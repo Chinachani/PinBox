@@ -6,8 +6,7 @@ const path = require('node:path');
 const { IDBFactory } = require('fake-indexeddb');
 const { webcrypto } = require('node:crypto');
 
-function runtime() {
-  const storage = new Map([['wms-mode', 'local']]);
+function runtime(storage = new Map([['wms-mode', 'local']])) {
   const context = vm.createContext({
     indexedDB: new IDBFactory(), crypto: webcrypto, Papa: require('papaparse'), sha256: require('js-sha256').sha256,
     URL, URLSearchParams, FormData, File, Blob, Headers, Response, AbortSignal, TextEncoder, TextDecoder,
@@ -20,7 +19,7 @@ function runtime() {
   for (const name of ['local-db', 'local-api', 'api']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/js', name + '.js'), 'utf8'), context);
   }
-  return { ctx: context, ...vm.runInContext('({ LocalAPI, LocalDB, DataLayer, syncPushOps, syncPullSnapshot })', context) };
+  return { ctx: context, storage, ...vm.runInContext('({ LocalAPI, LocalDB, DataLayer, syncPushOps, syncPullSnapshot })', context) };
 }
 
 async function request(runtime, method, url, body) {
@@ -311,6 +310,76 @@ test('another window changing settings cannot mix a new key with the old server 
   };
   await vm.runInContext('syncTestConnection()', r.ctx);
   assert.deepEqual(sent, { url: 'http://original.test/api/stats', token: 'Bearer original-private-key' });
+});
+
+test('a failed settings save preserves the complete live and persisted connection', async () => {
+  const r = runtime();
+  r.DataLayer.setSettings({ mode: 'server', url: 'http://old.test', token: 'old-test-key' });
+  const before = [...r.storage];
+  r.ctx.localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+  assert.throws(() => r.DataLayer.setSettings({ mode: 'local', url: 'http://new.test', token: 'new-test-key' }), /原连接保持不变/);
+  assert.deepEqual([...r.storage], before);
+  let sent;
+  r.ctx.fetch = async (url, opts) => {
+    sent = { url, token: new Headers(opts.headers).get('Authorization') };
+    return new Response('{}');
+  };
+  await r.DataLayer.api('/api/stats');
+  assert.deepEqual(sent, { url: 'http://old.test/api/stats', token: 'Bearer old-test-key' });
+});
+
+test('setup commits one complete record without a second fallible onboarding write', async () => {
+  const r = runtime();
+  let writes = 0, reloads = 0;
+  const setItem = r.ctx.localStorage.setItem;
+  r.ctx.localStorage.setItem = (key, value) => {
+    if (++writes > 1) throw new Error('Unexpected second write');
+    setItem(key, value);
+  };
+  r.ctx.location.reload = () => { reloads++; };
+  r.ctx.stockRequestBusy = false;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/js/setup.js'), 'utf8'), r.ctx);
+  await vm.runInContext("commitDataSettings({ mode: 'server', url: 'new.test/', token: ' new-test-key ' })", r.ctx);
+  assert.equal(writes, 1);
+  assert.equal(reloads, 1);
+  assert.deepEqual(JSON.parse(r.storage.get('wms-data-settings')),
+    { version: 1, mode: 'server', serverUrl: 'http://new.test', token: 'new-test-key' });
+});
+
+test('new windows read the whole connection record rather than stale legacy fragments', () => {
+  const r = runtime(new Map([['wms-mode', 'server'], ['wms-server-url', 'http://old.test'], ['wms-api-token', 'old-test-key']]));
+  assert.equal(r.DataLayer.serverUrl, 'http://old.test');
+  assert.equal(r.DataLayer.token, 'old-test-key');
+  assert.equal(r.storage.has('wms-data-settings'), false);
+  r.DataLayer.setSettings({ mode: 'server', url: 'http://new.test', token: 'new-test-key' });
+  r.storage.set('wms-mode', 'local');
+  r.storage.set('wms-api-token', 'unrelated-legacy-key');
+  const next = runtime(r.storage);
+  assert.equal(next.DataLayer.mode, 'server');
+  assert.equal(next.DataLayer.serverUrl, 'http://new.test');
+  assert.equal(next.DataLayer.token, 'new-test-key');
+});
+
+test('a corrupt connection record blocks requests and sync until repaired without altering inventory', async () => {
+  const r = runtime(new Map([['wms-data-settings', '{broken'], ['wms-api-token', 'stale-test-key']]));
+  await create(r);
+  assert.equal(r.DataLayer.token, '');
+  await assert.rejects(r.DataLayer.api('/api/stats'), /连接设置已损坏/);
+  assert.throws(() => vm.runInContext('syncBase()', r.ctx), /连接设置已损坏/);
+  r.DataLayer.setSettings({ mode: 'local', url: '', token: '' });
+  assert.equal((await (await r.DataLayer.api('/api/materials/C10001')).json()).quantity, 20);
+  assert.equal(await r.LocalDB.count('pending_ops'), 1);
+});
+
+test('invalid settings do not partially change mode, address, or credentials', () => {
+  const r = runtime();
+  const before = [...r.storage];
+  assert.throws(() => r.DataLayer.setSettings({ mode: 'invalid', url: 'http://new.test', token: 'new-test-key' }));
+  assert.throws(() => r.DataLayer.setSettings({ mode: 'server', url: 'http://user:password@new.test', token: 'new-test-key' }));
+  assert.deepEqual([...r.storage], before);
+  assert.equal(r.DataLayer.mode, 'local');
+  assert.equal(r.DataLayer.serverUrl, '');
+  assert.equal(r.DataLayer.token, '');
 });
 
 test('local validation trims text and enforces server field lengths before queuing', async () => {

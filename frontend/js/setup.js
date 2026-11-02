@@ -15,12 +15,11 @@ const Setup = {
   },
   async initialize() {
     this.bind();
-    const configured = ['wms-onboarded', 'wms-mode', 'wms-server-url', 'wms-api-token'].some(key => localStorage.getItem(key));
-    if (configured) return true;
+    const configured = [DATA_SETTINGS_KEY, 'wms-onboarded', 'wms-mode', 'wms-server-url', 'wms-api-token'].some(key => localStorage.getItem(key));
+    if (configured && !DataLayer.settingsError) return true;
     // Older standalone clients may have inventory but no onboarding marker.
-    if (DataLayer.mode === 'local' && await LocalDB.count('materials')) {
+    if (!DataLayer.settingsError && DataLayer.mode === 'local' && await LocalDB.count('materials')) {
       DataLayer.setMode('local');
-      localStorage.setItem('wms-onboarded', '1');
       return true;
     }
     this.required = true;
@@ -49,7 +48,7 @@ const Setup = {
     this.hideKeys();
     $('setup-shared-panel').hidden = true;
     $('btn-setup-shared').setAttribute('aria-expanded', 'false');
-    this.status('');
+    this.status(DataLayer.settingsError || '', !DataLayer.settingsError);
     openModal('setup-wizard-modal');
     $('btn-setup-local').focus();
   },
@@ -173,10 +172,7 @@ async function withDataSettingsLock(callback) {
 async function commitDataSettings({ mode = DataLayer.mode, url = DataLayer.serverUrl, token = DataLayer.token }) {
   url = resolveSyncBase(url);
   return withDataSettingsLock(() => {
-    DataLayer.setServerUrl(url);
-    DataLayer.setToken(token);
-    DataLayer.setMode(mode);
-    localStorage.setItem('wms-onboarded', '1');
+    DataLayer.setSettings({ mode, url, token });
     window.location.reload();
   });
 }

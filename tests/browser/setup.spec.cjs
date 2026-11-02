@@ -58,7 +58,7 @@ test('legacy browser stash without a mode never silently hides a desktop SQLite 
 
 test('shared first use stays private until connection is verified and never places the key in a URL', async ({ page }) => {
   const requested = [];
-  await page.route('**/api/instance', route => route.fulfill({ json: { mode: 'shared', auth_required: true, version: '1.0.24' } }));
+  await page.route('**/api/instance', route => route.fulfill({ json: { mode: 'shared', auth_required: true, version: '1.0.25' } }));
   await page.route('**/api/stats', route => {
     requested.push(route.request().url());
     return route.fulfill(route.request().headers().authorization === 'Bearer test-shared-key'
@@ -208,4 +208,69 @@ test('failed existing-server authentication offers a direct connection setup act
   await expect(page.locator('#btn-configure-connection')).toBeVisible();
   await page.locator('#btn-configure-connection').click();
   await expect(page.locator('#setup-wizard-modal')).toHaveClass(/show/);
+});
+
+test('storage exhaustion during connection setup keeps the previous warehouse and queue intact', async ({ page }) => {
+  await existingLocal(page);
+  await page.evaluate(() => {
+    DataLayer.setSettings({ mode: 'local', url: 'http://old.test', token: 'old-test-key' });
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === 'wms-data-settings') throw new DOMException('Full', 'QuotaExceededError');
+      return setItem.call(this, key, value);
+    };
+    syncTestConnection = async () => ({ ok: true, msg: 'synthetic connection' });
+  });
+  await dataCenter(page);
+  await page.locator('#input-server-url').fill('http://new.test');
+  await page.locator('#input-api-token').fill('new-test-key');
+  await page.locator('#btn-server-apply').click();
+  await page.locator('#btn-confirm-ok').click();
+  await expect(page.locator('#sync-status')).toContainText('原连接保持不变');
+  const saved = await page.evaluate(() => ({
+    mode: DataLayer.mode, url: DataLayer.serverUrl, token: DataLayer.token,
+    record: JSON.parse(localStorage.getItem('wms-data-settings'))
+  }));
+  expect(saved).toEqual({ mode: 'local', url: 'http://old.test', token: 'old-test-key',
+    record: { version: 1, mode: 'local', serverUrl: 'http://old.test', token: 'old-test-key' } });
+  expect(await page.evaluate(() => LocalDB.count('pending_ops'))).toBe(1);
+  expect(await page.evaluate(async () => (await LocalDB.get('materials', 'C10001')).quantity)).toBe(8);
+});
+
+test('corrupt settings return to setup without using a stale key or clearing offline inventory', async ({ page }) => {
+  await page.addInitScript(() => { window.Capacitor = { isNativePlatform: () => true }; });
+  await existingLocal(page);
+  await page.evaluate(() => {
+    localStorage.setItem('wms-data-settings', '{broken');
+    localStorage.setItem('wms-api-token', 'stale-test-key');
+  });
+  await page.reload();
+  await expect(page.locator('#setup-wizard-modal')).toHaveClass(/show/);
+  await expect(page.locator('#setup-status')).toContainText('连接设置已损坏');
+  expect(await page.evaluate(() => DataLayer.token)).toBe('');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.locator('#btn-setup-local').click()]);
+  await expect(page.locator('#setup-wizard-modal')).not.toHaveClass(/show/);
+  await expect(page.locator('.material-card')).toContainText('LOCAL');
+  expect(await page.evaluate(() => DataLayer.token)).toBe('');
+  expect(await page.evaluate(() => LocalDB.count('pending_ops'))).toBe(1);
+});
+
+test('another window waits for its write to finish before adopting a complete connection record', async ({ page, context }) => {
+  await existingLocal(page);
+  await page.evaluate(() => DataLayer.setSettings({ url: 'http://old.test', token: 'old-test-key' }));
+  const other = await context.newPage();
+  await other.goto('/');
+  await other.evaluate(() => { dataWritesInFlight = 1; });
+  await page.evaluate(() => DataLayer.setSettings({ url: 'http://new.test', token: 'new-test-key' }));
+  await other.waitForTimeout(300);
+  expect(await other.evaluate(() => ({ url: DataLayer.serverUrl, token: DataLayer.token })))
+    .toEqual({ url: 'http://old.test', token: 'old-test-key' });
+  await Promise.all([
+    other.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    other.evaluate(() => { dataWritesInFlight = 0; })
+  ]);
+  expect(await other.evaluate(() => ({ url: DataLayer.serverUrl, token: DataLayer.token })))
+    .toEqual({ url: 'http://new.test', token: 'new-test-key' });
+  expect(await other.evaluate(() => LocalDB.count('pending_ops'))).toBe(1);
+  await other.close();
 });
