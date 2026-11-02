@@ -30,9 +30,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 # 导入数据库和解析模块
 sys.path.append(os.path.dirname(__file__))
+from clock import now_local
 from database import get_db_connection, init_db, DB_PATH, APP_DIR, transaction
 from parser import parse_lcsc_barcode, parse_import_records
-from schemas import MaterialCreate, MaterialUpdate, StockChange, LocationCreate, LocationUpdate, Backup, MAX_QUANTITY
+from schemas import MaterialCreate, MaterialUpdate, OnlineMaterialUpdate, StockChange, OnlineStockChange, LocationCreate, LocationUpdate, Backup, MAX_QUANTITY
 from sync import apply_operation, dataset_id
 from importer import import_records
 import bom as bom_engine
@@ -102,16 +103,6 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         hub.disconnect(ws)
 
-# 允许跨域（方便局域网内任意客户端调用）
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://localhost", "http://localhost", "capacitor://localhost"] + [s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip()],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def protect_api(request: Request, call_next):
     if request.url.path.startswith("/api/"):
@@ -125,6 +116,16 @@ async def protect_api(request: Request, call_next):
             return JSONResponse({"detail": "不允许此来源访问服务器"}, status_code=403)
     return await call_next(request)
 
+# 允许跨域（方便局域网内任意客户端调用）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://localhost", "http://localhost", "capacitor://localhost"] + [s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip()],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 # 初始化数据库
 init_db()
 
@@ -134,13 +135,9 @@ class ScanRequest(BaseModel):
 
 class BatchLocation(BaseModel):
     codes: List[str]
-    location: str = ""
+    location: str = Field(default="", max_length=256)
 
 # --- 工具函数 ---
-
-def now_local() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 
 async def read_upload(file):
     content = await file.read(20 * 1024 * 1024 + 1)
@@ -166,6 +163,13 @@ async def sync_operation(request: Request):
 def sync_state():
     with transaction() as conn:
         return {"dataset_id": dataset_id(conn)}
+
+
+@app.get("/api/sync/receipt/{op_id}")
+def operation_receipt(op_id: str):
+    with closing(get_db_connection()) as conn:
+        row = conn.execute("SELECT result FROM idempotency_keys WHERE key=?", (op_id,)).fetchone()
+        return {"applied": row is not None, "result": json.loads(row[0]) if row else None}
 
 # --- API 端点 ---
 
@@ -319,15 +323,15 @@ async def create_material(data: MaterialCreate):
 
         if data.quantity > 0:
             c.execute("""
-                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-                VALUES (?, 'init', ?, ?, '初始建档录入', ?)
-            """, (code, data.quantity, data.quantity, now_local()))
+                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at, unit_price)
+                VALUES (?, 'init', ?, ?, '初始建档录入', ?, ?)
+            """, (code, data.quantity, data.quantity, now_local(), data.price))
 
     await notify_change("create", code)
     return {"message": "创建成功", "code": code}
 
 @app.put("/api/materials/{code}")
-async def update_material(code: str, data: MaterialUpdate):
+async def update_material(code: str, data: OnlineMaterialUpdate):
     with transaction() as conn:
         c = conn.cursor()
         code = code.strip().upper()
@@ -337,10 +341,17 @@ async def update_material(code: str, data: MaterialUpdate):
             raise HTTPException(status_code=404, detail="元器件不存在")
 
         old_data = dict(row)
-        update_dict = data.model_dump(exclude_none=True)
+        update_dict = data.model_dump(exclude_none=True, exclude={"expected"})
 
         if not update_dict:
             return {"message": "无内容更新"}
+
+        expected = data.expected
+        if not isinstance(expected, dict) or set(update_dict) - set(expected):
+            raise HTTPException(409, "修改缺少字段原值，请刷新档案后重试")
+        conflicts = [key for key in update_dict if old_data[key] != expected[key]]
+        if conflicts:
+            raise HTTPException(409, "以下字段已被修改，请重新打开档案核对: " + ", ".join(conflicts))
 
         # 库位变更时，确保新库位存在于库位表
         if "location" in update_dict:
@@ -354,11 +365,11 @@ async def update_material(code: str, data: MaterialUpdate):
             new_q = update_dict["quantity"]
             delta = new_q - old_data["quantity"]
             c.execute("""
-                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
-                VALUES (?, 'adjust', ?, ?, '人工直接修正库存', ?)
-            """, (code, delta, new_q, now_local()))
+                INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at, unit_price)
+                VALUES (?, 'adjust', ?, ?, '人工直接修正库存', ?, ?)
+            """, (code, delta, new_q, now_local(), old_data["price"]))
 
-        set_clause = ", ".join([f"{k} = ?" for k in update_dict.keys()]) + ", updated_at = datetime('now','localtime')"
+        set_clause = ", ".join([f"{k} = ?" for k in update_dict.keys()]) + ", updated_at = pinbox_now()"
         values = list(update_dict.values()) + [code]
 
         c.execute(f"UPDATE materials SET {set_clause} WHERE code = ?", values)
@@ -381,41 +392,10 @@ async def delete_material(code: str):
     return {"message": f"已删除物料 {code}"}
 
 @app.post("/api/materials/{code}/stock")
-async def change_stock(code: str, change: StockChange):
-    with transaction() as conn:
-        c = conn.cursor()
-        code = code.strip().upper()
-
-        row = c.execute("SELECT * FROM materials WHERE code = ?", (code,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="元器件不存在")
-
-        current_q = row["quantity"]
-        delta = change.delta
-        if delta == 0:
-            raise HTTPException(status_code=400, detail="变动数量不能为 0")
-
-        # 原子更新：库存不足时 WHERE 条件不成立，rowcount 为 0
-        cur = c.execute("""
-            UPDATE materials
-            SET quantity = quantity + ?, updated_at = datetime('now','localtime')
-            WHERE code = ? AND quantity + ? BETWEEN 0 AND ?
-        """, (delta, code, delta, MAX_QUANTITY))
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=400, detail=f"库存不足，当前仅剩 {current_q} {row['unit']}")
-
-        new_q = c.execute("SELECT quantity FROM materials WHERE code = ?", (code,)).fetchone()[0]
-        change_type = "in" if delta > 0 else "out"
-        reason = change.reason or ("快速扫码入库" if delta > 0 else "快速出库领料")
-        project = (change.project or "").strip()
-
-        c.execute("""
-            INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, project, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (code, change_type, delta, new_q, reason, project, now_local()))
-
-    await notify_change("stock", code, {"delta": delta, "current": new_q, "project": project})
-    return {"message": "库存变动成功", "code": code, "previous": current_q, "delta": delta, "current": new_q}
+async def change_stock(code: str, change: OnlineStockChange):
+    result = apply_operation({"kind": "stock", "code": code.strip().upper(), **change.model_dump(exclude={"dataset_id"})}, change.dataset_id)
+    await notify_change("stock", code, {"delta": result["delta"], "current": result["current"], "project": change.project or ""})
+    return result
 
 @app.post("/api/scan-image")
 async def scan_image(file: UploadFile = File(...)):
@@ -603,7 +583,7 @@ async def update_location(loc_id: int, data: LocationUpdate):
 
         if "name" in updates:
             c.execute("UPDATE locations SET name = ? WHERE id = ?", (updates["name"], loc_id))
-            c.execute("UPDATE materials SET location = ?, updated_at = datetime('now','localtime') WHERE location = ?",
+            c.execute("UPDATE materials SET location = ?, updated_at = pinbox_now() WHERE location = ?",
                       (updates["name"], row["name"]))
         if "note" in updates:
             c.execute("UPDATE locations SET note = ? WHERE id = ?", (updates["note"], loc_id))
@@ -623,7 +603,7 @@ async def delete_location(loc_id: int, force: bool = False):
         if used > 0 and not force:
             raise HTTPException(status_code=400, detail=f"该库位下仍有 {used} 款物料，请先移走或使用强制删除")
 
-        c.execute("UPDATE materials SET location = '', updated_at = datetime('now','localtime') WHERE location = ?", (row["name"],))
+        c.execute("UPDATE materials SET location = '', updated_at = pinbox_now() WHERE location = ?", (row["name"],))
         c.execute("DELETE FROM locations WHERE id = ?", (loc_id,))
     await notify_change("location_delete", "", {"id": loc_id, "name": row["name"]})
     return {"message": f"库位 {row['name']} 已删除", "cleared_materials": used}
@@ -646,7 +626,7 @@ async def batch_assign_location(data: BatchLocation):
             row = c.execute("SELECT quantity FROM materials WHERE code = ?", (code,)).fetchone()
             if not row:
                 continue
-            c.execute("UPDATE materials SET location = ?, updated_at = datetime('now','localtime') WHERE code = ?",
+            c.execute("UPDATE materials SET location = ?, updated_at = pinbox_now() WHERE code = ?",
                       (loc, code))
             c.execute("""
                 INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, created_at)
@@ -710,7 +690,7 @@ def backup_all():
     conn.execute("BEGIN IMMEDIATE")
     c = conn.cursor()
     data = {
-        "backup_version": 1,
+        "backup_version": 2,
         "exported_at": now_local(),
         "materials": [dict(r) for r in c.execute("SELECT * FROM materials").fetchall()],
         "stock_logs": [dict(r) for r in c.execute("SELECT * FROM stock_logs").fetchall()],
@@ -740,11 +720,17 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = Query(""))
 
     materials = data["materials"]
 
-    receipts = raw_data.get("import_receipts", [])
+    if raw_data.get("pending_ops"):
+        raise HTTPException(400, "本地备份还有未推送操作，不能直接覆盖服务器；请先核对并完成同步")
+    local_meta = raw_data.get("local_meta", [])
+    if not isinstance(local_meta, list) or any(not isinstance(r, dict) for r in local_meta):
+        raise HTTPException(400, "本地元数据无效")
+    receipts = raw_data.get("import_receipts", [r for r in local_meta if str(r.get("key", "")).startswith("import:")])
     if not isinstance(receipts, list) or any(not isinstance(r, dict) or not isinstance(r.get("key"), str) or not r["key"].startswith("import:") for r in receipts):
         raise HTTPException(400, "备份导入凭据无效")
-    backup_name = _run_backup()
     with transaction() as conn:
+        # The reserved write lock covers both the safety snapshot and replacement.
+        backup_name = _run_backup()
         c = conn.cursor()
         c.execute("DELETE FROM stock_logs")
         c.execute("DELETE FROM materials")
@@ -779,10 +765,10 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = Query(""))
             if not code:
                 continue
             c.execute("""
-                INSERT INTO stock_logs (id, material_code, change_type, delta, remaining, reason, project, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO stock_logs (id, material_code, change_type, delta, remaining, reason, project, created_at, unit_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (l.get("id"), code, l.get("change_type", "init"), l.get("delta", 0), l.get("remaining", 0),
-                  l.get("reason", ""), l.get("project", ""), l.get("created_at") or now_local()))
+                  l.get("reason", ""), l.get("project", ""), l.get("created_at") or now_local(), l.get("unit_price")))
             log_count += 1
 
         c.execute("INSERT OR IGNORE INTO locations (name) SELECT DISTINCT location FROM materials WHERE location != ''")
@@ -798,8 +784,9 @@ async def wipe_database(confirm: str = Query("")):
     """清空全部业务数据（物料/流水/库位），用于彻底重建库存。清空前自动生成一份完整备份。"""
     if confirm != "yes":
         raise HTTPException(status_code=400, detail="缺少确认参数，拒绝清空")
-    backup_name = _run_backup()
     with transaction() as conn:
+        # The reserved write lock covers both the safety snapshot and replacement.
+        backup_name = _run_backup()
         c = conn.cursor()
         c.execute("DELETE FROM stock_logs")
         c.execute("DELETE FROM materials")
@@ -842,8 +829,8 @@ def get_logs(
         conds.append(type_map[type])
 
     if days is not None and days > 0:
-        conds.append("l.created_at >= datetime('now', 'localtime', ?)")
-        params.append(f'-{int(days)} days')
+        conds.append("l.created_at >= datetime(pinbox_now(), 'start of day', ?)")
+        params.append(f'-{int(days) - 1} days')
 
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
 
@@ -884,7 +871,7 @@ def dashboard():
                SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) as in_qty,
                SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END) as out_qty
         FROM stock_logs
-        WHERE created_at >= datetime('now', 'localtime', '-7 days')
+        WHERE created_at >= datetime(pinbox_now(), 'start of day', '-6 days')
         GROUP BY day ORDER BY day ASC
     """).fetchall()
 
@@ -1022,7 +1009,8 @@ def project_stats():
         SELECT COALESCE(NULLIF(l.project, ''), '(未关联项目)') as project,
                COUNT(DISTINCT l.material_code) as materials,
                SUM(CASE WHEN l.delta < 0 THEN -l.delta ELSE 0 END) as out_pieces,
-               ROUND(SUM(CASE WHEN l.delta < 0 THEN -l.delta * COALESCE(m.price, 0) ELSE 0 END), 2) as out_cost
+               ROUND(SUM(CASE WHEN l.delta < 0 THEN -l.delta * COALESCE(l.unit_price, 0) ELSE 0 END), 2) as out_cost,
+               SUM(CASE WHEN l.unit_price IS NULL THEN -l.delta ELSE 0 END) as unpriced_pieces
         FROM stock_logs l
         LEFT JOIN materials m ON l.material_code = m.code
         WHERE l.delta < 0

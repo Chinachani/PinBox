@@ -25,13 +25,27 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: pip install -r backend/requirements.txt pytest httpx
+      - run: pip install --require-hashes -r backend/requirements.lock
+      - run: pip install pytest httpx pip-audit
       - run: npm ci
-      - run: python -m pytest tests/test_inventory.py -q
+      - run: python -m pytest tests -q
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - run: npm audit --audit-level=high
+      - name: Build production container without business data
+        run: docker build -t pinbox-ci .
+      - name: Smoke test container authentication
+        run: |
+          docker run -d --name pinbox-ci -p 18088:8088 -e PINBOX_API_TOKEN=test-only pinbox-ci
+          for i in $(seq 1 30); do
+            curl -fsS -H 'Authorization: Bearer test-only' http://127.0.0.1:18088/api/stats && break
+            sleep 1
+          done
+          curl -fsS -H 'Authorization: Bearer test-only' http://127.0.0.1:18088/api/version
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/api/stats)" = 401
+          docker rm -f pinbox-ci
+      - run: npm audit --audit-level=moderate
+      - run: pip-audit --no-deps --disable-pip -r backend/requirements.lock
 
   # =========================================================================
   # 1. 编译 Windows 独立版程序 (PinBox.exe)
@@ -53,7 +67,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install --require-hashes -r backend/requirements.lock
           pip install pyinstaller
 
       - name: Build Standalone Windows EXE
@@ -104,7 +118,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg fakeroot
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install --require-hashes -r backend/requirements.lock
           pip install pyinstaller
 
       - name: Build Linux Binary

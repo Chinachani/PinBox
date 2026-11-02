@@ -1,5 +1,6 @@
 services:
   lcsc-stock-mobile:
+    image: ${PINBOX_IMAGE:-pinbox:local}
     build: .
     container_name: lcsc-stock-mobile
     restart: always
@@ -9,8 +10,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./certs:/app/certs
-      - ./backend:/app/backend
-      - ./frontend:/app/frontend
+      - ./backend:/app/backend:ro
+      - ./frontend:/app/frontend:ro
       - ./package.json:/app/package.json:ro
     command: ["python", "backend/main.py"]
     environment:

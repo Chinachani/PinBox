@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import sys
+from clock import now_local
 from contextlib import contextmanager
 
 APP_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
@@ -15,6 +16,7 @@ def get_db_connection() -> sqlite3.Connection:
     os.makedirs(DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.create_function("pinbox_now", 0, now_local)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
@@ -79,7 +81,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         note TEXT DEFAULT '',
-        created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+        created_at TIMESTAMP DEFAULT (pinbox_now())
     );
     """)
 
@@ -119,6 +121,9 @@ def init_db():
     columns = {r[1] for r in cursor.execute("PRAGMA table_info(stock_logs)")}
     if "project" not in columns:
         cursor.execute("ALTER TABLE stock_logs ADD COLUMN project TEXT DEFAULT '';")
+    if "unit_price" not in columns:
+        # Historical prices are unknown; never backfill them using today's price.
+        cursor.execute("ALTER TABLE stock_logs ADD COLUMN unit_price REAL;")
 
     # 一次性时区迁移：老数据由 UTC 校正为东八区本地时间
     migrated = cursor.execute("SELECT value FROM app_meta WHERE key = 'tz_shift_plus8_v1'").fetchone()

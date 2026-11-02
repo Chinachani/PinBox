@@ -179,25 +179,30 @@ def parse_bom_text(content: str) -> List[Dict[str, Any]]:
     for lineno, line in enumerate(lines, 1):
         if not line:
             continue
-        if lineno <= 2 and header_re.search(line) and not re.search(r'C\d{4,9}', line):
+        if lineno <= 2 and header_re.search(line) and not re.search(r'C\d{1,9}', line):
             continue  # 表头行
         tokens = [t for t in re.split(r'[,;|]|\s{1,}', line) if t]
         if not tokens:
             continue
 
         code = None
-        cm = re.search(r'\b(C\d{4,9})\b', line, re.I)
+        cm = re.search(r'\b(C\d{1,9})\b', line, re.I)
         if cm:
             code = cm.group(1).upper()
 
-        # Only the final token is a quantity; package codes remain part of the specification.
+        # Package numbers are never implicit quantities. Use x0603 for that count.
         qty = 1
-        m = re.fullmatch(r'(?:[xX*×]|\+)?(\d{1,9})', tokens[-1])
-        if len(tokens) > 1 and m and (tokens[-1] not in PACKAGE_TOKENS or len(tokens) > 2):
+        last = tokens[-1]
+        m = re.fullmatch(r'(?:[xX*×]|\+)?(\d{1,10})', last)
+        if len(tokens) > 1 and last in PACKAGE_TOKENS:
+            raise ValueError(f"第 {lineno} 行缺少明确数量；封装后请加数量或 x数量")
+        if len(tokens) > 1 and m:
             qty = int(m.group(1))
             tokens.pop()
-            if qty < 1:
-                raise ValueError("BOM 数量必须是正整数")
+            if not 1 <= qty <= 2147483647:
+                raise ValueError(f"第 {lineno} 行 BOM 数量必须是正整数")
+        elif len(tokens) > 1 and re.fullmatch(r'[xX*×]?[+\-]?\d[\d.eE+\-]*', last):
+            raise ValueError(f"第 {lineno} 行 BOM 数量必须是正整数")
 
         tokens_left = [t for t in tokens if t.upper() != (code or '')]
         refs = [t for t in tokens_left if re.fullmatch(r'(?:R|C|L|D|Q|U|J|P|LED|SW)\d+', t, re.I)]
@@ -234,7 +239,7 @@ def parse_bom_file_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for row in rows:
         model = pick(row, key_model)
         code_raw = pick(row, key_code)
-        cm = re.search(r'\b(C\d{4,9})\b', code_raw or '', re.I)
+        cm = re.search(r'\b(C\d{1,9})\b', code_raw or '', re.I)
         code = cm.group(1).upper() if cm else None
         if not model and not code:
             continue
@@ -258,7 +263,7 @@ def parse_bom_file_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _norm(s: str) -> str:
-    return re.sub(r'[\s\-_()（）/\\.,·]+', '', str(s or '')).upper()
+    return re.sub(r'\s+', '', str(s or '')).upper()
 
 def _tokenize(s: str) -> List[str]:
     return [t for t in re.split(r'[^0-9A-Za-z\u4e00-\u9fff]+', str(s or '').upper()) if len(t) >= 2]

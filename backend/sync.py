@@ -1,7 +1,7 @@
 """Replay offline operations once, in the same transaction as their receipt."""
 import hashlib
 import json
-from datetime import datetime
+from clock import now_local
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -40,13 +40,14 @@ def apply_operation(op, expected_dataset=None):
 
 
 def _apply(conn, op):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_local()
     kind = op.get("kind")
     code = str(op.get("code", "")).strip().upper()
 
-    def log(delta, remaining, reason, change_type="adjust", project=""):
-        conn.execute("INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, project, created_at) VALUES (?,?,?,?,?,?,?)",
-                     (code, change_type, delta, remaining, reason, project, now))
+    def log(delta, remaining, reason, change_type="adjust", project="", unit_price=None):
+        price = unit_price if unit_price is not None else conn.execute("SELECT price FROM materials WHERE code=?", (code,)).fetchone()[0]
+        conn.execute("INSERT INTO stock_logs (material_code, change_type, delta, remaining, reason, project, created_at, unit_price) VALUES (?,?,?,?,?,?,?,?)",
+                     (code, change_type, delta, remaining, reason, project, now, price))
 
     def register_location(name):
         if name:
@@ -69,14 +70,15 @@ def _apply(conn, op):
         if not row:
             if kind == "delete":
                 return {"message": "物料已删除"}
-            raise HTTPException(409, f"物料 {code} 不存在，请先核对")
+            raise HTTPException(404, f"物料 {code} 不存在，请先核对")
         if kind == "stock":
             data = StockChange.model_validate(op)
             remaining = row["quantity"] + data.delta
             if not data.delta or not 0 <= remaining <= MAX_QUANTITY:
-                raise HTTPException(409, f"物料 {code} 库存不足或数量越界，操作已保留")
+                raise HTTPException(400, f"物料 {code} 库存不足或数量越界，本次未记账")
             conn.execute("UPDATE materials SET quantity=?, updated_at=? WHERE code=?", (remaining, now, code))
-            log(data.delta, remaining, data.reason or "离线同步", "in" if data.delta > 0 else "out", data.project or "")
+            log(data.delta, remaining, data.reason or "离线同步", "in" if data.delta > 0 else "out", data.project or "", data.unit_price)
+            return {"message": "库存变动成功", "code": code, "previous": row["quantity"], "delta": data.delta, "current": remaining}
         else:
             expected = op.get("expected")
             if not isinstance(expected, dict):

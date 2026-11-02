@@ -2869,3 +2869,16 @@ input[type="number"] {
 .danger-zone .panel-title {
   color: #e5484d;
 }
+
+/* Native controls preserve the existing visual language and keyboard access. */
+.sidebar-item, .nav-item, .cat-chip { font-family: inherit; text-align: left; }
+.sidebar-item, .nav-item { border: 0; }
+.sidebar-item, .nav-item { background: transparent; }
+.sidebar-item { width: 100%; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.cat-chip[hidden] { display: none; }
+.cat-search { grid-column: 1 / -1; position: sticky; top: 0; margin-bottom: 8px; background: var(--bg-card, #fff); }
+@media (max-width: 767px) {
+  .cat-dropdown { display: block; }
+  .cat-dd-panel { width: min(330px, calc(100vw - 32px)); max-height: 55vh; }
+}

@@ -1,4 +1,4 @@
-from datetime import datetime
+from clock import now_local
 
 from fastapi import HTTPException
 
@@ -23,7 +23,7 @@ def import_records(conn, records, receipt, filename):
             raise HTTPException(400, f"物料 {code} 累计数量越界")
 
     added = updated = 0
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_local()
     for data in records:
         code = data["code"]
         row = conn.execute("SELECT * FROM materials WHERE code=?", (code,)).fetchone()
@@ -40,7 +40,7 @@ def import_records(conn, records, receipt, filename):
             data.update(created_at=now, updated_at=now)
             conn.execute(f"INSERT INTO materials ({','.join(data)}) VALUES ({','.join('?' for _ in data)})", list(data.values()))
             added += 1
-        conn.execute("INSERT INTO stock_logs (material_code,change_type,delta,remaining,reason,created_at) VALUES (?,?,?,?,?,?)",
-                     (code, "import" if row else "init", data["quantity"], remaining, f"订单导入 ({filename}) · {data['batch']}", now))
+        conn.execute("INSERT INTO stock_logs (material_code,change_type,delta,remaining,reason,created_at,unit_price) VALUES (?,?,?,?,?,?,?)",
+                     (code, "import" if row else "init", data["quantity"], remaining, f"订单导入 ({filename}) · {data['batch']}", now, data["price"]))
     conn.execute("INSERT INTO app_meta (key,value) VALUES (?,?)", (key, now))
     return {"message": "导入完成", "total_parsed": len(records), "newly_added": added, "stock_updated": updated, "skipped": 0}

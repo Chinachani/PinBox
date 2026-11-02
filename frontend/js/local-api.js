@@ -5,18 +5,9 @@
 const createLocalAPI = (LocalDB) => {
 
   // ---------- 工具 ----------
-  function nowLocal() {
-    const d = new Date();
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  }
-
-  function dayLocal(offset = 0) {
-    const d = new Date();
-    d.setDate(d.getDate() + offset);
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  }
+  // Business timestamps use Beijing time on every device, including overseas clients.
+  function nowLocal() { return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' '); }
+  function dayLocal(offset = 0) { return new Date(Date.now() + 8 * 3600000 + offset * 86400000).toISOString().slice(0, 10); }
 
   function shim(ok, status, data) {
     return { ok, status, json: async () => data, _data: data };
@@ -29,6 +20,14 @@ const createLocalAPI = (LocalDB) => {
   }
 
   function validateMaterial(data, partial = false) {
+    if (!data || typeof data !== 'object') throw new Error('物料记录必须是对象');
+    for (const key of ['code', 'model', 'category', 'brand', 'package', 'unit', 'location', 'use_case', 'batch', 'order_date', 'remark']) {
+      if (typeof data[key] === 'string') data[key] = data[key].trim();
+    }
+    if (typeof data.code === 'string') data.code = data.code.toUpperCase();
+    for (const [key, max] of [['code', 128], ['model', 2000], ['location', 256]]) {
+      if (data[key] !== undefined && (typeof data[key] !== 'string' || [...data[key]].length > max)) throw new Error(`${key} 长度不能超过 ${max}`);
+    }
     for (const key of ['quantity', 'min_stock']) {
       if (data[key] !== undefined && (!Number.isInteger(data[key]) || data[key] < 0 || data[key] > 2147483647))
         throw new Error(`${key} 必须是有效非负整数`);
@@ -54,7 +53,8 @@ const createLocalAPI = (LocalDB) => {
   async function addLog(code, type, delta, remaining, reason, project = '') {
     await LocalDB.add('logs', {
       material_code: code, change_type: type, delta, remaining,
-      reason: reason || '', project: project || '', created_at: nowLocal()
+      reason: reason || '', project: project || '', created_at: nowLocal(),
+      unit_price: (await LocalDB.get('materials', code))?.price ?? null
     });
   }
 
@@ -189,7 +189,7 @@ const createLocalAPI = (LocalDB) => {
     return res;
   }
 
-  function norm(s) { return String(s || '').replace(/[\s\-_()（）/\\.,·]+/g, '').toUpperCase(); }
+  function norm(s) { return String(s || '').replace(/\s+/g, '').toUpperCase(); }
   function tokenize(s) {
     return String(s || '').toUpperCase().split(/[^0-9A-Z\u4e00-\u9fff]+/).filter(t => t.length >= 2);
   }
@@ -200,18 +200,20 @@ const createLocalAPI = (LocalDB) => {
     const headerRe = /(型号|数量|位号|规格| qty |quantity|value|designator|comment|manufacturer)/i;
     lines.forEach((line, idx) => {
       if (!line) return;
-      if (idx <= 1 && headerRe.test(line) && !/C\d{4,9}/i.test(line)) return;
+      if (idx <= 1 && headerRe.test(line) && !/C\d{1,9}/i.test(line)) return;
       const tokens = line.split(/[,;|]|\s{1,}/).filter(Boolean);
       if (!tokens.length) return;
-      const cm = line.match(/\b(C\d{4,9})\b/i);
+      const cm = line.match(/\b(C\d{1,9})\b/i);
       const code = cm ? cm[1].toUpperCase() : null;
       let qty = 1;
-      const quantity = tokens.at(-1).match(/^(?:[xX*×]|\+)?(\d{1,9})$/);
-      if (tokens.length > 1 && quantity && (!PACKAGE_TOKENS.includes(tokens.at(-1)) || tokens.length > 2)) {
+      const last = tokens.at(-1);
+      const quantity = last.match(/^(?:[xX*×]|\+)?(\d{1,10})$/);
+      if (tokens.length > 1 && PACKAGE_TOKENS.includes(last)) throw new Error(`第 ${idx + 1} 行缺少明确数量；封装后请加数量或 x数量`);
+      if (tokens.length > 1 && quantity) {
         qty = Number(quantity[1]);
         tokens.pop();
-        if (qty < 1) throw new Error('BOM 数量必须是正整数');
-      }
+        if (qty < 1 || qty > 2147483647) throw new Error(`第 ${idx + 1} 行 BOM 数量必须是正整数`);
+      } else if (tokens.length > 1 && /^[xX*×]?[+\-]?\d[\d.eE+\-]*$/.test(last)) throw new Error(`第 ${idx + 1} 行 BOM 数量必须是正整数`);
       let left = tokens.filter(t => t.toUpperCase() !== code);
       const refs = left.filter(t => /^(?:R|C|L|D|Q|U|J|P|LED|SW)\d+$/i.test(t));
       const model = left.filter(t => !refs.includes(t)).join(' ') || code || '';
@@ -397,21 +399,25 @@ const createLocalAPI = (LocalDB) => {
 
   function rowsToMaterials(rows) {
     const items = [];
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
+      if (!row || typeof row !== 'object') throw new Error(`第 ${index + 1} 行无效`);
       const pick = (...keys) => keys.map(k => row[k]).find(v => v !== undefined && v !== null && String(v).trim() !== '');
-      const codeRaw = row['商品编号'] || row['code'] || row['C编号'] || row['立创编号'] || '';
-      if (!String(codeRaw).trim()) continue;
+      const codeRaw = row['商品编号'] || row['code'] || row['C编号'] || row['立创编号'] || row['商品代码'] || '';
+      if (!Object.values(row).some(v => v !== null && v !== undefined && String(v).trim())) continue;
+      if (!String(codeRaw).trim()) throw new Error(`第 ${index + 1} 行缺少物料编号，未导入任何数据`);
+      if (pick('quantity', '订购数量', '采购数量', '数量', '实发数量', 'qty') === undefined) throw new Error(`第 ${index + 1} 行缺少数量，未导入任何数据`);
+      if (typeof pick('quantity', '订购数量', '采购数量', '数量', '实发数量', 'qty') === 'boolean') throw new Error('数量不能是布尔值');
       const qty = Number(String(pick('quantity', '订购数量', '采购数量', '数量', '实发数量', 'qty') ?? 1).replace(/,/g, ''));
-      const price = Number(String(pick('price', '单价', '单价(元)', '含税单价') ?? 0).replace(/[￥¥,]/g, ''));
+      const price = Number(String(pick('price', '单价', '单价(元)', '单价（人民币含税）', '含税单价') ?? 0).replace(/[￥¥,]/g, ''));
       items.push({
         code: String(codeRaw).trim().toUpperCase(),
         category: pick('category', '商品类型', '分类') || '导入物料',
         brand: pick('brand', '品牌') || '',
-        model: pick('model', '商品型号', '商品型号/名称', '型号') || String(codeRaw),
-        package: pick('package', '封装格式', '封装') || '',
+        model: pick('model', '商品型号', '商品型号/名称', '型号', '型号/名称', 'name', '商品名称') || String(codeRaw),
+        package: pick('package', '封装格式', '封装', 'pkg') || '',
         quantity: qty, unit: pick('unit', '商品单位', '单位') || '个',
-        price, use_case: pick('use_case', '核心用途/实验场景', '商品名称', '用途') || '',
-        batch: pick('batch', '库存批次', 'source') || '',
+        price, use_case: pick('use_case', '核心用途/实验场景', 'use', '用途') || '',
+        batch: pick('batch', '批次', '库存批次', 'source') || '',
         order_date: pick('order_date', '订单日期') || '',
         location: pick('location', '库位') || '',
         min_stock: Number(pick('min_stock', '预警线') ?? 0),
@@ -556,7 +562,7 @@ const createLocalAPI = (LocalDB) => {
         if (method === 'GET') {
           if (!mat) return errJson(404, '元器件不存在');
           const allLogs = await LocalDB.byIndex('logs', 'material_code', code);
-          mat.logs = allLogs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 30);
+          mat.logs = allLogs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '') || b.id - a.id).slice(0, 30);
           return okJson(mat);
         }
         if (method === 'PUT') {
@@ -567,6 +573,7 @@ const createLocalAPI = (LocalDB) => {
           for (const k of ['category', 'brand', 'model', 'package', 'quantity', 'unit', 'price', 'location', 'use_case', 'batch', 'order_date', 'min_stock', 'remark']) {
             if (d[k] !== undefined && d[k] !== null) changes[k] = d[k];
           }
+          if (d.expected && Object.keys(changes).some(k => !(k in d.expected) || d.expected[k] !== mat[k])) return errJson(409, '档案已被修改，请重新打开并核对');
           if (!Object.keys(changes).length) return okJson({ message: '无内容更新' });
           if ('location' in changes) {
             changes.location = (changes.location || '').trim();
@@ -611,7 +618,7 @@ const createLocalAPI = (LocalDB) => {
         mat.updated_at = nowLocal();
         await LocalDB.put('materials', mat);
         await addLog(code, delta > 0 ? 'in' : 'out', delta, mat.quantity, d.reason || (delta > 0 ? '快速扫码入库' : '快速出库领料'), d.project || '');
-        await addPendingOp({ kind: 'stock', code, delta, reason: d.reason || '', project: d.project || '' });
+        await addPendingOp({ kind: 'stock', code, delta, unit_price: mat.price || 0, reason: d.reason || '', project: d.project || '' });
         return okJson({ message: '库存变动成功', code, previous: mat.quantity - delta, delta, current: mat.quantity });
       }
 
@@ -647,13 +654,14 @@ const createLocalAPI = (LocalDB) => {
       }
       if (p === '/api/locations' && method === 'POST') {
         const d = await readBody();
+        if (typeof d.name !== 'string' || [...d.name.trim()].length > 256 || (d.note !== undefined && typeof d.note !== 'string')) return errJson(400, '库位名称或备注无效');
         const name = (d.name || '').trim();
         if (!name) return errJson(400, '库位名称不能为空');
         const locs = await LocalDB.getAll('locations');
         if (locs.some(l => l.name === name)) return errJson(400, `库位 ${name} 已存在`);
         const id = await nextLocId();
-        await LocalDB.put('locations', { id, name, note: d.note || '', created_at: nowLocal() });
-        await addPendingOp({ kind: 'location_create', name, note: d.note || '' });
+        await LocalDB.put('locations', { id, name, note: (d.note || '').trim(), created_at: nowLocal() });
+        await addPendingOp({ kind: 'location_create', name, note: (d.note || '').trim() });
         return okJson({ message: '库位创建成功', id, name });
       }
       const locItem = p.match(/^\/api\/locations\/(\d+)$/);
@@ -666,6 +674,8 @@ const createLocalAPI = (LocalDB) => {
           const d = await readBody();
           const originalName = loc.name;
           const expectedNote = loc.note || '';
+          if (d.name !== undefined && (typeof d.name !== 'string' || [...d.name.trim()].length > 256)) return errJson(400, '库位名称无效');
+          if (d.note !== undefined && typeof d.note !== 'string') return errJson(400, '库位备注无效');
           if (d.name !== undefined && !String(d.name).trim()) return errJson(400, '库位名称不能为空');
           const mats = await LocalDB.getAll('materials');
           if (d.name && d.name.trim() && d.name.trim() !== loc.name) {
@@ -679,7 +689,7 @@ const createLocalAPI = (LocalDB) => {
             }
             loc.name = newName;
           }
-          if (d.note !== undefined && d.note !== null) loc.note = d.note;
+          if (d.note !== undefined && d.note !== null) loc.note = d.note.trim();
           await LocalDB.put('locations', loc);
           await addPendingOp({ kind: 'location_update', original_name: originalName, expected_note: expectedNote, payload: { name: loc.name, note: loc.note } });
           return okJson({ message: '库位已更新' });
@@ -700,6 +710,7 @@ const createLocalAPI = (LocalDB) => {
       }
       if (p === '/api/batch-location' && method === 'POST') {
         const d = await readBody();
+        if (d.location !== undefined && (typeof d.location !== 'string' || [...d.location.trim()].length > 256)) return errJson(400, '库位名称无效');
         const loc = (d.location || '').trim();
         if (loc) {
           const locs = await LocalDB.getAll('locations');
@@ -817,14 +828,15 @@ const createLocalAPI = (LocalDB) => {
         const agg = Object.create(null);
         for (const l of logs) {
           const name = l.project || '(未关联项目)';
-          agg[name] = agg[name] || { project: name, materials: new Set(), out_pieces: 0, out_cost: 0 };
+          agg[name] = agg[name] || { project: name, materials: new Set(), out_pieces: 0, out_cost: 0, unpriced_pieces: 0 };
           agg[name].materials.add(l.material_code);
           agg[name].out_pieces += -l.delta;
-          agg[name].out_cost += -l.delta * ((matMap[l.material_code] || {}).price || 0);
+          agg[name].out_cost += -l.delta * (l.unit_price ?? 0);
+          if (l.unit_price == null) agg[name].unpriced_pieces += -l.delta;
         }
         return okJson(Object.values(agg).map(r => ({
           project: r.project, materials: r.materials.size, out_pieces: r.out_pieces,
-          out_cost: Math.round(r.out_cost * 100) / 100
+          out_cost: Math.round(r.out_cost * 100) / 100, unpriced_pieces: r.unpriced_pieces
         })).sort((a, b) => b.out_pieces - a.out_pieces).slice(0, 10));
       }
 
@@ -861,7 +873,7 @@ const createLocalAPI = (LocalDB) => {
       // ---- 备份 / 恢复（本地） ----
       if (p === '/api/backup' && method === 'GET') {
         const data = {
-          backup_version: 1,
+          backup_version: 2,
           exported_at: nowLocal(),
           materials: await LocalDB.getAll('materials'),
           stock_logs: await LocalDB.getAll('logs'),
@@ -869,6 +881,8 @@ const createLocalAPI = (LocalDB) => {
         };
         data.pending_ops = await LocalDB.getAll('pending_ops');
         data.local_meta = await LocalDB.getAll('meta');
+        data.import_receipts = data.local_meta.filter(m => m.key.startsWith('import:'));
+        data.dataset_id = data.local_meta.find(m => m.key === 'dataset_id')?.value || null;
         return okJson(data);
       }
       if (p === '/api/restore' && method === 'POST') {
@@ -889,6 +903,7 @@ const createLocalAPI = (LocalDB) => {
         await LocalDB.clear('locations');
         await LocalDB.clear('pending_ops');
         await LocalDB.clear('meta');
+        await LocalDB.put('meta', { key: 'generation', value: newOperationId() });
         return okJson({ message: '已清空本地数据', backup: null });
       }
 
@@ -964,6 +979,7 @@ const createLocalAPI = (LocalDB) => {
   async function restoreSnapshot(data) {
     if (!data || !Array.isArray(data.materials) || !Array.isArray(data.stock_logs || []) || !Array.isArray(data.locations || []))
       throw new Error('备份结构无效');
+    if (![1, 2].includes(data.backup_version ?? 1)) throw new Error('不支持此备份版本');
     const codes = new Set();
     for (const mat of data.materials) {
       validateMaterial(mat);
@@ -976,15 +992,21 @@ const createLocalAPI = (LocalDB) => {
       log.material_code = String(log.material_code || '').trim().toUpperCase();
       if (!codes.has(log.material_code) || !Number.isInteger(log.delta) || !Number.isInteger(log.remaining) || log.remaining < 0)
         throw new Error('备份流水无效');
-      if (log.id !== undefined && (!Number.isInteger(log.id) || log.id < 1 || logIds.has(log.id))) throw new Error('流水 ID 无效');
+      if (log.id != null && (!Number.isInteger(log.id) || log.id < 1 || logIds.has(log.id))) throw new Error('流水 ID 无效');
       logIds.add(log.id);
+    }
+    let nextLogId = Math.max(0, ...[...logIds].filter(Number.isInteger));
+    for (const log of data.stock_logs || []) {
+      if (log.id == null) log.id = ++nextLogId;
+      if (log.unit_price != null && (!Number.isFinite(log.unit_price) || log.unit_price < 0 || log.unit_price > 1e12)) throw new Error('流水单价无效');
+      if (Math.abs(log.delta) > 2147483647 || log.remaining > 2147483647 || !['in', 'out', 'adjust', 'init', 'import'].includes(log.change_type)) throw new Error('备份流水无效');
     }
     const names = new Set(), ids = new Set();
     for (const loc of data.locations || []) {
-      if (typeof loc.name !== 'string' || !loc.name.trim() || names.has(loc.name.trim())) throw new Error('库位名称无效或重复');
+      if (typeof loc.name !== 'string' || !loc.name.trim() || [...loc.name.trim()].length > 256 || names.has(loc.name.trim())) throw new Error('库位名称无效或重复');
       loc.name = loc.name.trim();
       names.add(loc.name);
-      if (loc.id !== undefined && (!Number.isInteger(loc.id) || loc.id < 1 || ids.has(loc.id))) throw new Error('库位 ID 无效');
+      if (loc.id != null && (!Number.isInteger(loc.id) || loc.id < 1 || ids.has(loc.id))) throw new Error('库位 ID 无效');
       ids.add(loc.id);
     }
     await LocalDB.clear('materials');
@@ -1006,7 +1028,7 @@ const createLocalAPI = (LocalDB) => {
     }
     await LocalDB.put('meta', { key: 'loc_seq', value: maxLocId });
     await LocalDB.bulkPut('materials', (data.materials || []).filter(m => m.code));
-    await LocalDB.bulkPut('logs', (data.stock_logs || []).filter(l => l.material_code));
+    for (const log of data.stock_logs || []) await LocalDB.add('logs', log);
     await LocalDB.put('meta', { key: 'last_sync', value: nowLocal() });
     await LocalDB.put('meta', { key: 'dataset_id', value: data.dataset_id || null });
     if (data.import_receipts !== undefined) {
@@ -1025,12 +1047,20 @@ const createLocalAPI = (LocalDB) => {
             (op.op_id !== undefined && (typeof op.op_id !== 'string' || !op.op_id)))
           throw new Error('待同步操作无效');
       }
-      await LocalDB.bulkPut('pending_ops', data.pending_ops);
+      const opIds = new Set(), rowIds = new Set();
+      let nextId = Math.max(0, ...data.pending_ops.map(o => Number.isInteger(o.id) ? o.id : 0));
+      for (const op of data.pending_ops) {
+        if (op.id == null) op.id = ++nextId;
+        if (!Number.isInteger(op.id) || op.id < 1 || rowIds.has(op.id) || (op.op_id && opIds.has(op.op_id))) throw new Error('待同步操作编号重复或无效');
+        rowIds.add(op.id); if (op.op_id) opIds.add(op.op_id);
+        await LocalDB.add('pending_ops', op);
+      }
     }
     if (data.local_meta !== undefined) {
       if (!Array.isArray(data.local_meta)) throw new Error('本地元数据无效');
-      await LocalDB.bulkPut('meta', data.local_meta);
+      await LocalDB.bulkPut('meta', data.local_meta.filter(m => !['loc_seq', 'generation'].includes(m.key)));
     }
+    await LocalDB.put('meta', { key: 'generation', value: newOperationId() });
   }
 
   return { handle, parseLcscBarcode, restoreSnapshot, parseBomText, decodeSpec, matchBomItems };
@@ -1069,9 +1099,14 @@ const LocalAPI = {
         opts = { ...opts, body: { __file: { name: file.name, text, hash } } };
       }
     }
-    return LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'],
-      db => createLocalAPI(db).handle(method.toUpperCase(), path, opts));
+    const run = () => LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'],
+      db => createLocalAPI(db).handle(method.toUpperCase(), path, opts), method.toUpperCase() === 'GET' ? 'readonly' : 'readwrite');
+    try {
+      return /^\/api\/(restore|wipe)(?:\?|$)/.test(path) ? await withReplacementGuard(run) : await run();
+    } catch (error) {
+      return { ok: false, status: 409, json: async () => ({ detail: error.message }) };
+    }
   },
-  restoreSnapshot: data => LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'],
-    db => createLocalAPI(db).restoreSnapshot(data))
+  restoreSnapshot: data => withReplacementGuard(() => LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'],
+    db => createLocalAPI(db).restoreSnapshot(data)))
 };

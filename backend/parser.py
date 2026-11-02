@@ -56,20 +56,22 @@ def normalize_record(row, filename):
         raise ValueError("物料记录必须是对象")
     code = pick(row, "code", "商品编号", "C编号", "立创编号", "商品代码")
     if not code:
-        return None
+        if not any(v is not None and str(v).strip() for v in row.values()):
+            return None
+        raise ValueError("缺少物料编号，未导入任何数据")
     model = str(pick(row, "model", "商品型号", "商品型号/名称", "型号", "型号/名称", "name", "商品名称", default=code)).strip()
     category = str(pick(row, "category", "商品类型", "分类", default="导入物料"))
     brand = str(pick(row, "brand", "品牌"))
     data = {
         "code": str(code).strip().upper(), "model": model, "category": category, "brand": brand,
         "package": str(pick(row, "package", "封装格式", "封装", "pkg")),
-        "quantity": number(pick(row, "quantity", "订购数量", "采购数量", "数量", "实发数量", "qty", default=1), True),
+        "quantity": number(pick(row, "quantity", "订购数量", "采购数量", "数量", "实发数量", "qty", default=""), True),
         "price": number(pick(row, "price", "单价", "单价(元)", "单价（人民币含税）", "含税单价", default=0)),
         "min_stock": number(pick(row, "min_stock", "预警线", default=0), True),
         "unit": str(pick(row, "unit", "商品单位", "单位", default="个")),
         "location": str(pick(row, "location", "库位")),
         "use_case": str(pick(row, "use_case", "核心用途/实验场景", "use", "用途", default=infer_material_use_case(str(code), category, brand, model, str(row.get("description", ""))))),
-        "batch": str(pick(row, "batch", "库存批次", "source", default=filename)),
+        "batch": str(pick(row, "batch", "批次", "库存批次", "source", default=filename)),
         "order_date": str(pick(row, "order_date", "订单日期")),
         "remark": str(pick(row, "remark", "备注")),
     }
@@ -89,7 +91,16 @@ def table_records(rows):
     if header is None:
         raise ValueError("未找到物料编号表头")
     headers = [str(c).strip() if c is not None else "" for c in rows[header]]
-    return [dict(zip(headers, row)) for row in rows[header + 1:] if any(c is not None and str(c).strip() for c in row)]
+    result = []
+    for row in rows[header + 1:]:
+        cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+        if not cells:
+            continue
+        # Only skip our single-cell report footer, not arbitrary bad material rows.
+        if len(cells) == 1 and re.fullmatch(r"合计：\d+ 款 / \d+ 件 / 资产估值 ￥[\d.]+", cells[0]):
+            continue
+        result.append(dict(zip(headers, row)))
+    return result
 
 
 def parse_import_records(content, filename):

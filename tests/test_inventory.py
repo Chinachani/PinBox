@@ -15,6 +15,12 @@ from bom import decode_spec, parse_bom_text
 from parser import parse_lcsc_barcode
 
 
+def stock(client, code, payload):
+    return client.post(f"/api/materials/{code}/stock", json={
+        "op_id": str(uuid4()), "dataset_id": client.get("/api/sync/state").json()["dataset_id"], **payload
+    })
+
+
 def create(client, **fields):
     payload = {"code": "C10001", "model": "TEST-123", "quantity": 20, **fields}
     response = client.post("/api/materials", json=payload)
@@ -54,7 +60,7 @@ def test_quantity_update_and_pagination_are_validated(client):
 def test_concurrent_stock_never_overdraws_and_logs_match(client):
     create(client)
     with ThreadPoolExecutor(max_workers=8) as pool:
-        responses = list(pool.map(lambda _: client.post("/api/materials/C10001/stock", json={"delta": -1}), range(30)))
+        responses = list(pool.map(lambda _: stock(client, 'C10001', {"delta": -1}), range(30)))
     assert sum(r.status_code == 200 for r in responses) == 20
     assert all(r.status_code in (200, 400) for r in responses)
     successes = [r.json() for r in responses if r.status_code == 200]
@@ -69,7 +75,7 @@ def test_failed_log_insert_rolls_back_stock(client):
     create(client)
     with database.transaction() as conn:
         conn.execute("CREATE TRIGGER fail_log BEFORE INSERT ON stock_logs BEGIN SELECT RAISE(ABORT, 'disk error'); END")
-    assert client.post("/api/materials/C10001/stock", json={"delta": -1}).status_code == 500
+    assert stock(client, 'C10001', {"delta": -1}).status_code == 500
     assert client.get("/api/materials/C10001").json()["quantity"] == 20
 
 
@@ -116,7 +122,7 @@ def test_sync_rejects_old_dataset_after_wipe(client):
 
 def test_backup_roundtrip_preserves_project_ids_and_empty_database(client):
     create(client, location="A", price=1.25)
-    client.post("/api/materials/C10001/stock", json={"delta": -2, "project": "board-A"})
+    stock(client, 'C10001', {"delta": -2, "project": "board-A"})
     before = snapshot(client)
     assert restore(client, before).status_code == 200
     after = snapshot(client)
@@ -218,7 +224,8 @@ def test_bom_short_models_and_package_conflicts_require_confirmation(client):
     item = match_bom_items([{'model': 'SS34', 'qty': 1, 'package': ''}])[0]
     assert item['matched_code'] is None
     assert item['candidates']
-    client.put('/api/materials/C10001', json={'model': 'SS34'})
+    response = client.put('/api/materials/C10001', json={'model': 'SS34', 'expected': {'model': 'SS34 diode'}})
+    assert response.status_code == 200
     assert match_bom_items([{'model': 'SS34', 'qty': 1, 'package': 'SMB'}])[0]['matched_code'] is None
     assert match_bom_items([{'model': 'SS34', 'qty': 1, 'package': 'SMA'}])[0]['matched_code'] == 'C10001'
     create(client, code='C10002', model='SS34', package='SMB')
@@ -278,7 +285,7 @@ def test_live_notifications_cross_client_event_loops(client):
     with client.websocket_connect('/ws', headers={'origin': 'http://testserver'}) as first:
         with TestClient(main.app) as other:
             with other.websocket_connect('/ws', headers={'origin': 'http://testserver'}) as second:
-                assert client.post('/api/materials/C10001/stock', json={'delta': -1}).status_code == 200
+                assert stock(client, 'C10001', {'delta': -1}).status_code == 200
                 assert first.receive_json()['current'] == 19
                 assert second.receive_json()['current'] == 19
 

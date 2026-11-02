@@ -1,0 +1,17 @@
+{
+  "remote_business_data_unchanged": {
+    "materials": true,
+    "stock_logs": true,
+    "locations": true,
+    "dataset_id": true,
+    "import_receipts": true
+  },
+  "remote_counts": {
+    "materials": 116,
+    "stock_logs": 138,
+    "locations": 2
+  },
+  "local_database_unchanged": true,
+  "local_sha256": "5abeeb47265dc2edcc5ab536c0439f5f349098e5da02ca701ee31b74afc7519b",
+  "reviewed_commit": "13b3f0c4029c6de28a28e5cf94fd72951644902f"
+}

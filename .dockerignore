@@ -6,6 +6,9 @@ android
 data
 certs
 .env
+.deployment
+docs
+tests
 *.keystore
 **/__pycache__
 .pytest_cache

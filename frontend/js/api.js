@@ -1,4 +1,4 @@
-const APP_VERSION = '1.0.21';
+const APP_VERSION = '1.0.22';
 
 function isStandaloneApp() {
   return !!window.Capacitor?.isNativePlatform?.() || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -24,7 +24,7 @@ function resolveSyncBase(raw) {
 function serverHeaders(extra = {}) {
   const headers = new Headers(extra);
   const token = localStorage.getItem('wms-api-token');
-  if (token) headers.set('Authorization', 'Bearer ' + token);
+  if (token && !headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
   return Object.fromEntries(headers);
 }
 
@@ -79,6 +79,8 @@ const DataLayer = {
   },
   async api(path, opts = {}) {
     if (this.mode === 'local') return LocalAPI.handle(opts.method || 'GET', path, opts);
+    if (opts.method?.toUpperCase() === 'POST' && /^\/api\/materials\/[^/]+\/stock$/.test(path))
+      return durableStockRequest(path, opts);
     return serverRequest(resolveSyncBase(this.serverUrl), path, opts);
   }
 };
@@ -91,11 +93,11 @@ function syncBase() {
   return resolveSyncBase(DataLayer.serverUrl) || (isNativeHttpAvailable() ? '' : location.origin);
 }
 
-async function syncTestConnection() {
+async function syncTestConnection(rawBase = DataLayer.serverUrl, token = localStorage.getItem('wms-api-token') || '') {
   try {
-    const base = syncBase();
+    const base = resolveSyncBase(rawBase) || (isNativeHttpAvailable() ? '' : location.origin);
     if (!base) throw new Error('请先填写服务器地址');
-    const res = await serverRequest(base, '/api/stats');
+    const res = await serverRequest(base, '/api/stats', { headers: { Authorization: token ? 'Bearer ' + token : '' } });
     const data = await res.json();
     if (!res.ok || !Number.isInteger(data.total_sku)) throw new Error(data.detail || `HTTP ${res.status}`);
     return { ok: true, msg: `连接成功：${data.total_sku} 款物料 / ${data.total_pieces} 件` };
@@ -119,6 +121,7 @@ async function syncPushOps() {
       const base = syncBase();
       if (!base) throw new Error('请先填写服务器地址');
       const meta = await LocalDB.get('meta', 'sync_server');
+      const generation = (await LocalDB.get('meta', 'generation'))?.value;
       if (meta?.value && meta.value !== base) throw new Error('本机队列属于另一台服务器，请先备份并核对');
       let dataset = await LocalDB.get('meta', 'dataset_id');
       if (!dataset?.value) {
@@ -126,11 +129,16 @@ async function syncPushOps() {
         const state = await stateRes.json();
         if (!stateRes.ok || !state.dataset_id) throw new Error(state.detail || '服务器不支持安全同步，请先升级服务器');
         dataset = { key: 'dataset_id', value: state.dataset_id };
-        await LocalDB.put('meta', dataset);
       }
-      const ops = (await LocalDB.getAll('pending_ops')).sort((a, b) => a.id - b.id);
-      if (ops.length) await LocalDB.put('meta', { key: 'sync_server', value: base });
+      const ops = await LocalDB.transaction(['meta', 'pending_ops'], async db => {
+        if ((await db.get('meta', 'generation'))?.value !== generation) throw new Error('本机数据在连接期间已变化，请重新核对');
+        const pending = (await db.getAll('pending_ops')).sort((a, b) => a.id - b.id);
+        await db.put('meta', dataset);
+        if (pending.length) await db.put('meta', { key: 'sync_server', value: base });
+        return pending;
+      });
       for (const op of ops) {
+        if ((await LocalDB.get('meta', 'generation'))?.value !== generation) throw new Error('本机数据已恢复或清空，已停止推送，请重新核对');
         if (!op.op_id) {
           throw new Error('旧版待同步操作缺少操作号，请先导出本地备份并核对是否已入账，再处理队列');
         }
@@ -140,7 +148,12 @@ async function syncPushOps() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-        await LocalDB.delete('pending_ops', op.id);
+        await LocalDB.transaction(['pending_ops', 'meta'], async db => {
+          const current = await db.get('pending_ops', op.id);
+          if ((await db.get('meta', 'generation'))?.value !== generation || !current || current.op_id !== op.op_id)
+            throw new Error('本机数据已变化，未删除新队列；请核对服务器已收到的操作');
+          await db.delete('pending_ops', op.id);
+        });
         pushed++;
       }
       return { ok: true, pushed, msg: `推送完成：成功 ${pushed} 条；可拉取服务器快照核对最新库存` };
@@ -156,12 +169,14 @@ async function syncPullSnapshot() {
       const base = syncBase();
       if (!base) throw new Error('请先填写服务器地址');
       if (await LocalDB.count('pending_ops')) throw new Error('尚有未推送操作，请先推送或导出备份处理冲突');
+      const generation = (await LocalDB.get('meta', 'generation'))?.value;
       const res = await serverRequest(base, '/api/backup');
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
       await LocalDB.transaction(['materials', 'logs', 'locations', 'meta', 'pending_ops'], async db => {
         // A stock operation may have arrived while the HTTP request was in flight.
         if (await db.count('pending_ops')) throw new Error('拉取期间产生了新操作，已取消覆盖');
+        if ((await db.get('meta', 'generation'))?.value !== generation) throw new Error('拉取期间本机数据已恢复或清空，已取消覆盖');
         await createLocalAPI(db).restoreSnapshot(data);
         await db.put('meta', { key: 'sync_server', value: base });
       });
@@ -172,4 +187,58 @@ async function syncPullSnapshot() {
 
 async function syncPendingCount() {
   return LocalDB.count('pending_ops');
+}
+
+async function withReplacementGuard(callback) {
+  if (syncInFlight) throw new Error('同步正在进行，不能恢复或清空本机数据');
+  if (navigator.locks) return navigator.locks.request('pinbox-sync', { ifAvailable: true }, lock => {
+    if (!lock) throw new Error('其他窗口正在同步，不能恢复或清空本机数据');
+    return callback();
+  });
+  return callback();
+}
+
+let stockRequestBusy = false;
+async function durableStockRequest(path, opts) {
+  if (stockRequestBusy) throw new Error('上一笔库存操作尚未返回，请勿重复提交');
+  stockRequestBusy = true;
+  const run = async () => {
+    const base = syncBase();
+    if (!base) throw new Error('请先设置服务器地址');
+    const payload = typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body;
+    const signature = JSON.stringify([path, payload.delta, payload.reason || '', payload.project || '']);
+    let pending = await LocalDB.get('online_ops', base);
+    if (pending && pending.signature !== signature) throw new Error('有结果未确认的库存操作，请在数据中心「核对在线操作」中重试原操作');
+    if (!pending) {
+      const res = await serverRequest(base, '/api/sync/state');
+      const data = await res.json();
+      if (!res.ok || !data.dataset_id) throw new Error(data.detail || '服务器不支持安全记账，请先升级');
+      pending = await LocalDB.transaction(['online_ops'], async db => {
+        const existing = await db.get('online_ops', base);
+        if (existing) {
+          if (existing.signature !== signature) throw new Error('另一窗口有未确认操作，请先核对');
+          return existing;
+        }
+        const record = { server: base, path, signature, payload: { ...payload, op_id: newOperationId(), dataset_id: data.dataset_id }, created_at: new Date().toISOString() };
+        await db.add('online_ops', record);
+        return record;
+      });
+    }
+    try {
+      const res = await serverRequest(base, pending.path, { ...opts, method: 'POST', body: JSON.stringify(pending.payload) });
+      // Parse before deleting the durable request: a truncated success response is uncertain.
+      const data = await res.clone().json();
+      if (res.ok || [400, 404, 422].includes(res.status)) {
+        await LocalDB.transaction(['online_ops'], async db => {
+          const current = await db.get('online_ops', base);
+          if (current?.payload.op_id === pending.payload.op_id) await db.delete('online_ops', base);
+        });
+      }
+      return new Response(JSON.stringify(data), { status: res.status, headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+      throw new Error('结果尚未确认，操作号已保留；重试原操作不会重复记账。' + error.message);
+    }
+  };
+  try { return navigator.locks ? await navigator.locks.request('pinbox-online-stock', run) : await run(); }
+  finally { stockRequestBusy = false; }
 }

@@ -1,0 +1,41 @@
+{
+  "pending_badge": {
+    "actual": 1,
+    "shown": "0"
+  },
+  "category_keyboard": {
+    "categoryTabIndices": [
+      -1,
+      -1,
+      -1,
+      -1
+    ],
+    "navTabIndices": [
+      -1,
+      -1,
+      -1,
+      -1,
+      -1
+    ]
+  },
+  "category_deleted_selection": {
+    "selected": "old",
+    "options": [
+      "new"
+    ],
+    "visible": 0,
+    "caption": "分类：old"
+  },
+  "local_log_injection": {
+    "storedInvalidChangeType": "invalid-type"
+  },
+  "restore_missing_log_id": [
+    {
+      "id": 2,
+      "material_code": "C10001",
+      "change_type": "in",
+      "delta": 1,
+      "remaining": 2
+    }
+  ]
+}
