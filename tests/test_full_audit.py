@@ -181,3 +181,17 @@ def test_old_receipt_remains_queryable_after_wipe_without_replaying(client):
     assert receipt['applied'] is True
     assert receipt['result']['current'] == 17
     assert client.get('/api/stats').json()['total_sku'] == 0
+
+
+def test_lcsc_links_accept_short_codes_and_reject_invalid_identifiers(client):
+    from urllib.parse import quote
+
+    for raw in ['C1', ' c123 ', 'C123456789']:
+        response = client.get('/api/lcsc/price/' + quote(raw, safe=''))
+        assert response.status_code == 200, response.text
+        code = raw.strip().upper()
+        assert response.json()['code'] == code
+        assert response.json()['url'] == 'https://so.szlcsc.com/global.html?k=' + code
+    for raw in ['C', 'C1234567890', 'C123x', 'C123?redirect=bad', 'C１２３']:
+        response = client.get('/api/lcsc/price/' + quote(raw, safe=''))
+        assert response.status_code == 400, response.text

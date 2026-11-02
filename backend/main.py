@@ -1321,7 +1321,7 @@ async def bom_order_excel(request: Request):
 def lcsc_price(code: str):
     import re as _re
     code = code.strip().upper()
-    if not _re.fullmatch(r"C\d{4,9}", code):
+    if not _re.fullmatch(r"C[0-9]{1,9}", code):
         raise HTTPException(status_code=400, detail="编号格式不正确")
     return {
         "ok": True,

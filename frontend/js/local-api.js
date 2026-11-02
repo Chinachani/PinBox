@@ -457,8 +457,10 @@ const createLocalAPI = (LocalDB) => {
         return okJson({ query, spec: decodeSpec(query), results: items[0].candidates.map(c => ({ ...mats.find(m => m.code === c.code), score: c.score })), total: items[0].candidates.length });
       }
       if (p.startsWith('/api/lcsc/price/') && method === 'GET') {
-        const code = decodeURIComponent(p.split('/').pop());
-        return okJson({ ok: true, url: 'https://so.szlcsc.com/global.html?k=' + encodeURIComponent(code) });
+        const code = decodeURIComponent(p.split('/').pop()).trim().toUpperCase();
+        if (!/^C[0-9]{1,9}$/.test(code)) return errJson(400, '编号格式不正确');
+        return okJson({ ok: true, code, url: 'https://so.szlcsc.com/global.html?k=' + code,
+          message: '请在打开的立创页面查看实时价格' });
       }
       if (p === '/api/stats' && method === 'GET') {
         const mats = await LocalDB.getAll('materials');
