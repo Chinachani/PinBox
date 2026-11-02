@@ -1,6 +1,6 @@
 {
   "name": "pinbox",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "PinBox 引脚仓 - 智能元器件库位与BOM管理系统",
   "scripts": {
     "cap:sync": "cap sync android",
@@ -11,6 +11,8 @@
   "dependencies": {
     "@capacitor/android": "^6.2.2",
     "@capacitor/core": "^6.2.2",
+    "@capacitor/filesystem": "6.0.4",
+    "@capacitor/share": "6.0.4",
     "js-sha256": "^0.11.1",
     "papaparse": "^5.5.3"
   },
@@ -20,6 +22,8 @@
     "fake-indexeddb": "^6.2.7"
   },
   "overrides": {
-    "tar": "^7.5.21"
+    "tar": "^7.5.21",
+    "glob": "^14.0.3",
+    "minimatch": "^11.0.4"
   }
 }

@@ -1,0 +1,67 @@
+{
+  "category_desktop": {
+    "categories": 60,
+    "overflow": false,
+    "panel_height": 358,
+    "panel_scroll_height": 392
+  },
+  "category_mobile": {
+    "categories": 60,
+    "overflow": false,
+    "chips_width": 358,
+    "chips_scroll": 6877
+  },
+  "websocket_stale": {
+    "serverHeader": 18,
+    "listCache": 20,
+    "listText": "20",
+    "toast": "🔄 库存变动 C10001（已同步）"
+  },
+  "scan_mode_change": {
+    "startedMode": "in",
+    "currentMode": "out",
+    "finalQuantity": 15
+  },
+  "batch_finish": {
+    "mode": "in",
+    "quantity": 28,
+    "count": 1
+  },
+  "bom_create_phantom": {
+    "prefilled": "10",
+    "initialLogs": 10,
+    "quantity": 10
+  },
+  "pagination_empty": {
+    "count": 24,
+    "page": 2,
+    "totalPages": 1,
+    "empty": "flex",
+    "pagination": "none",
+    "visible": 0
+  },
+  "location_filters": {
+    "category": "resistor",
+    "location": "B",
+    "visible": 0
+  },
+  "server_switch_stale": {
+    "displayed": {
+      "model": "TEST-A",
+      "quantity": 20
+    },
+    "result": {
+      "message": "库存变动成功",
+      "code": "C10001",
+      "previous": 80,
+      "delta": -1,
+      "current": 79
+    },
+    "newServer": "http://127.0.0.1:8099"
+  },
+  "lost_response": {
+    "firstReportedSuccess": false,
+    "afterFirst": 17,
+    "afterRetry": 14
+  }
+}

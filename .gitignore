@@ -26,6 +26,7 @@ wheels/
 
 # Virtual environments
 .env
+.deployment/
 .venv
 env/
 venv/

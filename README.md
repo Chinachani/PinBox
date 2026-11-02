@@ -11,7 +11,7 @@
 
 ---
 
-1.0.21 已修复库存同步、备份恢复、扫码及 BOM 等问题，详见 [审查记录与升级说明](docs/AUDIT-2026-10-30.md)。
+1.0.22 完成全流程审查中 25 项缺陷的代码修复，涵盖安全记账、同步恢复、分类筛选、BOM 和导入导出。请先阅读 [修复与升级说明](docs/FIXES-2026-11-03.md)，服务器和客户端需一起升级；启用认证后须在数据中心配置令牌。
 
 ## ✨ 它解决什么问题
 
@@ -72,7 +72,7 @@ docker compose up -d --build
 ### 方式二：直接运行
 
 ```bash
-pip install -r backend/requirements.txt
+pip install --require-hashes -r backend/requirements.lock
 python backend/main.py
 # 打开 http://localhost:8088
 ```
@@ -160,9 +160,9 @@ PinBox/
 ## 开发、部署与签名配置
 
 ```bash
-pip install -r backend/requirements.txt pytest httpx
+pip install --require-hashes -r backend/requirements.lock pytest httpx
 npm ci
-python -m pytest tests/test_inventory.py -q
+python -m pytest tests -q
 npm test
 npx playwright install chromium
 CI=true npm run test:e2e

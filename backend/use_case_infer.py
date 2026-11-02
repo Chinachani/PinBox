@@ -96,7 +96,7 @@ EXACT_USE_CASE_MAP = {
     'C55125813': '6800µF 80V巨型牛角铝电解大储能电容，大功率整流滤波与瞬态大电流放电',
 }
 
-def infer_material_use_case(code: str, category: str, brand: str, model: str, name_desc: str = "") -> str:
+def _infer_material_use_case(code: str, category: str, brand: str, model: str, name_desc: str = "") -> str:
     """
     智能推导元器件真实硬件用途：
     1. 优先查阅精准物料场景库；
@@ -110,38 +110,38 @@ def infer_material_use_case(code: str, category: str, brand: str, model: str, na
     
     # 阻值推导
     if '电阻' in category or 'RES' in full_text:
-        if '0.001' in full_text or '1MR' in full_text or '10MR' in full_text or '毫欧' in full_text or '采样' in full_text:
+        if re.search(r'(?<![A-Z0-9.])0\.001(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])1MR(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])10MR(?![A-Z0-9.])', full_text) or '毫欧' in full_text or '采样' in full_text:
             return '大功率低阻毫欧采样分流电阻，配INA226/电流表检测回路电流'
         elif 'NTC' in full_text or '热敏' in full_text:
             return '负温度系数NTC热敏电阻，主板过温监测与充放电温度保护'
-        elif '压敏' in full_text or '775V' in full_text or '471K' in full_text:
+        elif '压敏' in full_text or re.search(r'(?<![A-Z0-9.])775V(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])471K(?![A-Z0-9.])', full_text):
             return '防雷防过压防浪涌压敏电阻，抑制输入端瞬态浪涌毛刺'
-        elif '10K' in full_text or '0103' in full_text or '103' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])10K(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])0103(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])103(?![A-Z0-9.])', full_text):
             return 'I2C/单总线数据线弱上拉电阻、MCU复位引脚固定逻辑电平'
-        elif '4.7K' in full_text or '472' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])4\.7K(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])472(?![A-Z0-9.])', full_text):
             return 'I2C标准时钟/数据线上拉电阻，保证高低电平边沿陡峭'
-        elif '1K' in full_text or '102' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])1K(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])102(?![A-Z0-9.])', full_text):
             return 'LED指示灯限流分压电阻、三极管基极基极驱动限流'
-        elif '100R' in full_text or '100Ω' in full_text or '22R' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])100R(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])100Ω(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])22R(?![A-Z0-9.])', full_text):
             return 'USB数据线D+/D-阻抗匹配电阻、高频信号阻尼防反射'
-        elif '0R' in full_text or '0欧' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])0R(?![A-Z0-9.])', full_text) or re.search(r'(?<![0-9.])0欧', full_text):
             return '0欧姆跨接跳线电阻、电路模块调试断点与单点共地隔离'
         else:
             return '电路分压限流、偏置电压设定与基础信号衰减匹配'
 
     # 电容推导
     if '电容' in category or 'CAP' in full_text:
-        if '法拉' in full_text or '超级电容' in full_text or '20F' in full_text:
+        if '法拉' in full_text or '超级电容' in full_text or re.search(r'(?<![A-Z0-9.])20F(?![A-Z0-9.])', full_text):
             return '超大容量掉电数据备份电容，为MCU提供秒级断电应急供电'
         elif '铝电解' in full_text or '电解' in full_text:
             return '直流供电低频大容量储能滤波，平滑纹波并抑制瞬间大负载压降'
         elif 'X2' in full_text or '安规' in full_text or '薄膜' in full_text:
             return 'AC/DC输入端X2级抗干扰安规电容，滤除电网差模电磁杂波'
-        elif '100NF' in full_text or '0.1UF' in full_text or '104' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])100NF(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])0\.1UF(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])104(?![A-Z0-9.])', full_text):
             return '芯片VCC引脚高频去耦退耦电容，滤除电源高频毛刺防芯片死机'
-        elif '10UF' in full_text or '22UF' in full_text or '4.7UF' in full_text:
+        elif re.search(r'(?<![A-Z0-9.])10UF(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])22UF(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])4\.7UF(?![A-Z0-9.])', full_text):
             return 'LDO/开关稳压芯片输入输出端滤波退耦，保障电源环路稳定'
-        elif 'PF' in full_text or '22PF' in full_text or '15PF' in full_text:
+        elif 'PF' in full_text or re.search(r'(?<![A-Z0-9.])22PF(?![A-Z0-9.])', full_text) or re.search(r'(?<![A-Z0-9.])15PF(?![A-Z0-9.])', full_text):
             return '晶体振荡器负载匹配电容、射频天线高频微调滤波'
         else:
             return '电路高低频退耦滤波、旁路电容与直流电源平滑'
@@ -165,7 +165,7 @@ def infer_material_use_case(code: str, category: str, brand: str, model: str, na
     if 'MOS' in full_text or '场效应' in category or '三极管' in category:
         if 'P沟道' in full_text or 'P-CHANNEL' in full_text:
             return 'P沟道功率MOS管，高边电源自动切换控制与低损耗防反接'
-        elif 'TO-220' in full_text or '30A' in full_text:
+        elif 'TO-220' in full_text or re.search(r'(?<![A-Z0-9.])30A(?![A-Z0-9.])', full_text):
             return '大电流大功率NMOS管，PWM驱动直流电机、大功率灯带与继电器'
         else:
             return '小信号开关驱动、单片机弱电驱动弱电负载与电平转换'
@@ -192,7 +192,7 @@ def infer_material_use_case(code: str, category: str, brand: str, model: str, na
 
     # 晶振
     if '晶振' in category or 'OSC' in full_text or 'CRYSTAL' in full_text:
-        if '32.768' in full_text:
+        if re.search(r'(?<![A-Z0-9.])32\.768(?![A-Z0-9.])', full_text):
             return 'RTC实时时钟32.768kHz低功耗走时晶振，断电时钟维持'
         else:
             return '单片机高速外部时钟源基准，提供精确指令运行频率'
@@ -206,3 +206,8 @@ def infer_material_use_case(code: str, category: str, brand: str, model: str, na
         return '电路板组装焊接辅助、贴片元器件精密夹持与结构固定支撑'
 
     return f'原厂正品标准备件，用于相关硬件电路搭建与功能实现'
+
+
+def infer_material_use_case(code, category, brand, model, name_desc=""):
+    hint = _infer_material_use_case(code, category, brand, model, name_desc)
+    return ("[自动推断/未核验] " + hint) if hint else ""

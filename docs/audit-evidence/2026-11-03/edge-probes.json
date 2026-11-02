@@ -1,0 +1,20 @@
+{
+  "today_filter": {
+    "now": "2026-11-03T01:19:25.600458",
+    "yesterday_log": "2026-11-02 23:19:25",
+    "returned": 1
+  },
+  "cors_auth_error": {
+    "status": 401,
+    "allow_origin": null
+  },
+  "unauthenticated_write": {
+    "status": 200
+  },
+  "backup_wipe_race": {
+    "before": 21,
+    "after_concurrent_write": 28,
+    "backup_quantity": 21,
+    "live_count": 0
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "restore_during_sync": {
+    "sent_op": "b4b2c628-2f06-423f-8638-39da789a70c9",
+    "result": {
+      "ok": true,
+      "pushed": 1,
+      "msg": "推送完成：成功 1 条；可拉取服务器快照核对最新库存"
+    },
+    "quantity": 30,
+    "remaining_ops": []
+  },
+  "offline_limits": {
+    "model_length": 2001,
+    "location_length": 257
+  },
+  "local_log_order": [
+    {
+      "id": 1,
+      "delta": 20
+    },
+    {
+      "id": 2,
+      "delta": -1
+    }
+  ],
+  "local_detail_drops_newest": {
+    "total": 36,
+    "returned": 30,
+    "firstId": 1,
+    "lastId": 30
+  },
+  "import_normalization_conflict": {
+    "result": {
+      "ok": false,
+      "pushed": 1,
+      "msg": "已推送 1 条；剩余操作已保留：物料 C11638189 已在服务器修改，操作已保留"
+    },
+    "remaining": 1
+  }
+}

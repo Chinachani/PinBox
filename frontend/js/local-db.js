@@ -3,7 +3,7 @@
 // ============================================================
 const LocalDB = (() => {
   const DB_NAME = 'wms-local';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   let dbPromise = null;
 
   function open() {
@@ -12,6 +12,7 @@ const LocalDB = (() => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = (e) => {
         const db = e.target.result;
+        if (!db.objectStoreNames.contains('online_ops')) db.createObjectStore('online_ops', { keyPath: 'server' });
         if (!db.objectStoreNames.contains('materials')) {
           db.createObjectStore('materials', { keyPath: 'code' });
         }
@@ -77,6 +78,7 @@ const LocalDB = (() => {
         return result;
       }
       await done;
+      if (mode === 'readwrite' && names.includes('pending_ops')) notifyLocalChange();
       return result;
     } catch (error) {
       try { tx.abort(); } catch { /* already completed */ }
@@ -92,3 +94,11 @@ const LocalDB = (() => {
   }
   return api;
 })();
+
+// Dispatch only after commit; failed transactions must not publish stale queue counts.
+const localChanges = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('pinbox-data') : null;
+if (localChanges) localChanges.onmessage = () => window.dispatchEvent(new Event('pinbox-local-change'));
+function notifyLocalChange() {
+  if (typeof window.dispatchEvent === 'function') window.dispatchEvent(new Event('pinbox-local-change'));
+  localChanges?.postMessage('changed');
+}

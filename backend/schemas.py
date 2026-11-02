@@ -18,7 +18,7 @@ class MaterialCreate(BaseModel):
     quantity: Quantity = 0
     unit: str = "个"
     price: Price = 0.0
-    location: str = ""
+    location: str = Field(default="", max_length=256)
     use_case: str = ""
     batch: str = "手动录入"
     order_date: str = ""
@@ -40,7 +40,7 @@ class MaterialUpdate(BaseModel):
     quantity: Optional[Quantity] = None
     unit: Optional[str] = None
     price: Optional[Price] = None
-    location: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=256)
     use_case: Optional[str] = None
     batch: Optional[str] = None
     order_date: Optional[str] = None
@@ -52,6 +52,18 @@ class StockChange(BaseModel):
     delta: int = Field(strict=True, ge=-MAX_QUANTITY, le=MAX_QUANTITY)
     reason: Optional[str] = "手动调整"
     project: Optional[str] = ""
+    unit_price: Optional[Price] = None
+    op_id: Optional[str] = Field(default=None, min_length=8, max_length=128)
+    dataset_id: Optional[str] = None
+
+
+class OnlineMaterialUpdate(MaterialUpdate):
+    expected: Optional[dict] = None
+
+
+class OnlineStockChange(StockChange):
+    op_id: str = Field(min_length=8, max_length=128)
+    dataset_id: str = Field(min_length=1, max_length=128)
 
 
 class LocationCreate(BaseModel):
@@ -79,6 +91,7 @@ class BackupLog(BaseModel):
     remaining: Quantity
     reason: str = ""
     project: str = ""
+    unit_price: Optional[Price] = None
     created_at: Optional[str] = None
 
 
@@ -88,6 +101,7 @@ class BackupLocation(LocationCreate):
 
 
 class Backup(BaseModel):
+    backup_version: int = Field(default=1, ge=1, le=2)
     materials: list[BackupMaterial]
     stock_logs: list[BackupLog] = Field(default_factory=list)
     locations: list[BackupLocation] = Field(default_factory=list)

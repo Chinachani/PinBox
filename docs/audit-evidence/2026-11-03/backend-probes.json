@@ -1,0 +1,259 @@
+{
+  "bom_decimal_collision": {
+    "items": [
+      {
+        "raw": "47K 2",
+        "code": null,
+        "model": "47K",
+        "package": "",
+        "qty": 2,
+        "ref": "",
+        "candidates": [
+          {
+            "code": "C10001",
+            "model": "4.7K",
+            "brand": "",
+            "package": "0603",
+            "quantity": 20,
+            "price": 0.0,
+            "score": 0.95
+          }
+        ],
+        "matched_code": "C10001",
+        "matched_model": "4.7K",
+        "matched_brand": "",
+        "matched_price": 0.0,
+        "stock_qty": 20,
+        "match_tier": "norm",
+        "shortfall": 0,
+        "status": "ok",
+        "available_qty": 20
+      }
+    ],
+    "summary": {
+      "lines": 1,
+      "ok": 1,
+      "insufficient": 0,
+      "none": 0,
+      "total_cost": 0.0,
+      "shortfall_cost": 0.0
+    }
+  },
+  "bom_invalid_quantities": {
+    "C10001 1.5": {
+      "items": [
+        {
+          "raw": "C10001 1.5",
+          "code": "C10001",
+          "model": "1.5",
+          "package": "",
+          "qty": 1,
+          "ref": "",
+          "candidates": [
+            {
+              "code": "C10001",
+              "model": "4.7K",
+              "brand": "",
+              "package": "0603",
+              "quantity": 20,
+              "price": 0.0,
+              "score": 1.0
+            }
+          ],
+          "matched_code": "C10001",
+          "matched_model": "4.7K",
+          "matched_brand": "",
+          "matched_price": 0.0,
+          "stock_qty": 20,
+          "match_tier": "code",
+          "shortfall": 0,
+          "status": "ok",
+          "available_qty": 20
+        }
+      ],
+      "summary": {
+        "lines": 1,
+        "ok": 1,
+        "insufficient": 0,
+        "none": 0,
+        "total_cost": 0.0,
+        "shortfall_cost": 0.0
+      }
+    },
+    "C10001 -5": {
+      "items": [
+        {
+          "raw": "C10001 -5",
+          "code": "C10001",
+          "model": "-5",
+          "package": "",
+          "qty": 1,
+          "ref": "",
+          "candidates": [
+            {
+              "code": "C10001",
+              "model": "4.7K",
+              "brand": "",
+              "package": "0603",
+              "quantity": 20,
+              "price": 0.0,
+              "score": 1.0
+            }
+          ],
+          "matched_code": "C10001",
+          "matched_model": "4.7K",
+          "matched_brand": "",
+          "matched_price": 0.0,
+          "stock_qty": 20,
+          "match_tier": "code",
+          "shortfall": 0,
+          "status": "ok",
+          "available_qty": 20
+        }
+      ],
+      "summary": {
+        "lines": 1,
+        "ok": 1,
+        "insufficient": 0,
+        "none": 0,
+        "total_cost": 0.0,
+        "shortfall_cost": 0.0
+      }
+    },
+    "R1 10k 0603": {
+      "items": [
+        {
+          "raw": "R1 10k 0603",
+          "code": null,
+          "model": "10k",
+          "package": "0603",
+          "qty": 603,
+          "ref": "R1",
+          "candidates": [],
+          "matched_code": null,
+          "matched_model": null,
+          "matched_price": 0.0,
+          "stock_qty": 0,
+          "match_tier": null,
+          "shortfall": 603,
+          "status": "none"
+        }
+      ],
+      "summary": {
+        "lines": 1,
+        "ok": 0,
+        "insufficient": 0,
+        "none": 1,
+        "total_cost": 0.0,
+        "shortfall_cost": 0.0
+      }
+    },
+    "C123 5": {
+      "detail": "未从输入中解析出任何 BOM 行"
+    }
+  },
+  "online_retry": {
+    "statuses": [
+      200,
+      200
+    ],
+    "quantity": 14
+  },
+  "online_edit_overwrite": {
+    "code": "C10001",
+    "category": "未分类",
+    "brand": "",
+    "model": "TEST",
+    "package": "",
+    "quantity": 14,
+    "unit": "个",
+    "price": 9.0,
+    "location": "",
+    "use_case": "",
+    "batch": "手动录入",
+    "order_date": "",
+    "min_stock": 0,
+    "remark": "",
+    "created_at": "2026-11-03 01:13:02",
+    "updated_at": "2026-11-03 01:13:02",
+    "logs": [
+      {
+        "id": 3,
+        "material_code": "C10001",
+        "change_type": "out",
+        "delta": -3,
+        "remaining": 14,
+        "reason": "手动调整",
+        "created_at": "2026-11-03 01:13:02",
+        "project": ""
+      },
+      {
+        "id": 2,
+        "material_code": "C10001",
+        "change_type": "out",
+        "delta": -3,
+        "remaining": 17,
+        "reason": "手动调整",
+        "created_at": "2026-11-03 01:13:02",
+        "project": ""
+      },
+      {
+        "id": 1,
+        "material_code": "C10001",
+        "change_type": "init",
+        "delta": 20,
+        "remaining": 20,
+        "reason": "初始建档录入",
+        "created_at": "2026-11-03 01:13:02",
+        "project": ""
+      }
+    ]
+  },
+  "local_backup_receipt_loss": {
+    "restore": 200,
+    "reimport": 200,
+    "quantity": 10
+  },
+  "project_cost_changes": {
+    "before": [
+      {
+        "project": "project-A",
+        "materials": 1,
+        "out_pieces": 3,
+        "out_cost": 3.0
+      }
+    ],
+    "after_return": [
+      {
+        "project": "project-A",
+        "materials": 1,
+        "out_pieces": 3,
+        "out_cost": 3.0
+      }
+    ],
+    "after_price_edit": [
+      {
+        "project": "project-A",
+        "materials": 1,
+        "out_pieces": 3,
+        "out_cost": 30.0
+      }
+    ]
+  },
+  "excel_roundtrip": {
+    "status": 400,
+    "body": {
+      "detail": "导入文件无效: 第 2 条物料无效: 1 validation error for MaterialCreate\ncode\n  String should match pattern '^[^/\\x00-\\x1f]+$' [type=string_pattern_mismatch, input_value='合计：1 款 / 20 件 / 资产估值 ￥0.00', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_pattern_mismatch"
+    }
+  },
+  "invalid_import_row_silent_skip": {
+    "status": 200,
+    "body": {
+      "message": "导入完成",
+      "total_parsed": 1,
+      "newly_added": 1,
+      "stock_updated": 0,
+      "skipped": 0
+    }
+  }
+}
