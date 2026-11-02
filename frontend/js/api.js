@@ -1,4 +1,4 @@
-const APP_VERSION = '1.0.24';
+const APP_VERSION = '1.0.25';
 
 function isStandaloneApp() {
   return !!window.Capacitor?.isNativePlatform?.() || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -65,26 +65,42 @@ async function serverRequest(base, path, opts = {}) {
   return fetch(base + path, { ...fetchOpts, headers: serverHeaders(opts.headers), signal: opts.signal || AbortSignal.timeout(30000) });
 }
 
+const DATA_SETTINGS_KEY = 'wms-data-settings';
+function readDataSettings() {
+  const defaultMode = isStandaloneApp() ? 'local' : 'server';
+  const raw = localStorage.getItem(DATA_SETTINGS_KEY);
+  if (raw !== null) {
+    try {
+      const saved = JSON.parse(raw);
+      if (saved?.version !== 1 || !['server', 'local'].includes(saved.mode) ||
+          typeof saved.serverUrl !== 'string' || typeof saved.token !== 'string') throw new Error();
+      return { mode: saved.mode, serverUrl: saved.serverUrl, token: saved.token, settingsError: '' };
+    } catch (_) {
+      // Never fall back to stale credentials if the authoritative record is damaged.
+      return { mode: defaultMode, serverUrl: '', token: '', settingsError: '保存的连接设置已损坏，请重新选择使用方式；库存与待推送数据未改动。' };
+    }
+  }
+  return { mode: localStorage.getItem('wms-mode') || defaultMode,
+    serverUrl: localStorage.getItem('wms-server-url') || '',
+    token: localStorage.getItem('wms-api-token') || '', settingsError: '' };
+}
+
 let dataWritesInFlight = 0;
 const DataLayer = {
-  mode: localStorage.getItem('wms-mode') || (isStandaloneApp() ? 'local' : 'server'),
-  serverUrl: localStorage.getItem('wms-server-url') || '',
-  token: localStorage.getItem('wms-api-token') || '',
-  setMode(mode) {
+  ...readDataSettings(),
+  setSettings({ mode = this.mode, url = this.serverUrl, token = this.token }) {
     if (!['server', 'local'].includes(mode)) throw new Error('无效数据模式');
-    this.mode = mode;
-    localStorage.setItem('wms-mode', mode);
+    const saved = { version: 1, mode, serverUrl: resolveSyncBase(url), token: String(token || '').trim() };
+    // One atomic storage write commits the address/key pair before changing live requests.
+    try { localStorage.setItem(DATA_SETTINGS_KEY, JSON.stringify(saved)); }
+    catch (_) { throw new Error('无法保存连接设置，可能是浏览器存储空间不足或禁止写入。原连接保持不变，请勿清空库存数据。'); }
+    Object.assign(this, { mode: saved.mode, serverUrl: saved.serverUrl, token: saved.token, settingsError: '' });
   },
-  setServerUrl(value) {
-    this.serverUrl = resolveSyncBase(value);
-    localStorage.setItem('wms-server-url', this.serverUrl);
-  },
-  setToken(value) {
-    this.token = String(value || '').trim();
-    if (this.token) localStorage.setItem('wms-api-token', this.token);
-    else localStorage.removeItem('wms-api-token');
-  },
+  setMode(mode) { this.setSettings({ mode }); },
+  setServerUrl(url) { this.setSettings({ url }); },
+  setToken(token) { this.setSettings({ token }); },
   async api(path, opts = {}) {
+    if (this.settingsError) throw new Error(this.settingsError);
     const run = () => {
       if (this.mode === 'local') return LocalAPI.handle(opts.method || 'GET', path, opts);
       if (opts.method?.toUpperCase() === 'POST' && /^\/api\/materials\/[^/]+\/stock$/.test(path))
@@ -104,6 +120,7 @@ async function api(path, opts = {}) {
 }
 
 function syncBase() {
+  if (DataLayer.settingsError) throw new Error(DataLayer.settingsError);
   return resolveSyncBase(DataLayer.serverUrl) || (isNativeHttpAvailable() ? '' : location.origin);
 }
 

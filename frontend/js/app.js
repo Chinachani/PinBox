@@ -2966,7 +2966,8 @@ async function saveServerSettings() {
 }
 let settingsReloadTimer;
 window.addEventListener('storage', e => {
-  if (!['wms-mode', 'wms-server-url', 'wms-api-token'].includes(e.key)) return;
+  const legacy = ['wms-mode', 'wms-server-url', 'wms-api-token'].includes(e.key);
+  if (e.key !== null && e.key !== DATA_SETTINGS_KEY && !(legacy && !localStorage.getItem(DATA_SETTINGS_KEY))) return;
   clearTimeout(settingsReloadTimer);
   const reloadWhenIdle = () => {
     if (dataWritesInFlight || stockRequestBusy || syncInFlight) {
