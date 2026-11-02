@@ -367,3 +367,19 @@ test('local detail logs break equal timestamps by newest ID', async () => {
   assert.equal(data.logs[0].id, 36);
   assert.equal(data.logs.at(-1).id, 7);
 });
+
+test('local LCSC links normalize short codes and reject invalid identifiers', async () => {
+  const r = runtime();
+  for (const raw of ['C1', ' c123 ', 'C123456789']) {
+    const response = await request(r, 'GET', '/api/lcsc/price/' + encodeURIComponent(raw));
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    const code = raw.trim().toUpperCase();
+    assert.equal(data.code, code);
+    assert.equal(data.url, 'https://so.szlcsc.com/global.html?k=' + code);
+  }
+  for (const raw of ['C', 'C1234567890', 'C123x', 'C123?redirect=bad', 'C１２３']) {
+    const response = await request(r, 'GET', '/api/lcsc/price/' + encodeURIComponent(raw));
+    assert.equal(response.status, 400);
+  }
+});
