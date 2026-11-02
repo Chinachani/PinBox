@@ -17,7 +17,7 @@ module.exports = defineConfig({
   webServer: {
     command: `${process.env.CI ? 'python' : '.venv/bin/python'} -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8098`,
     url: 'http://127.0.0.1:8098',
-    env: { PINBOX_DATA_DIR: mkdtempSync(path.join(tmpdir(), 'pinbox-browser-')) },
+    env: { PINBOX_DEPLOYMENT_MODE: 'standalone', PINBOX_API_TOKEN: '', PINBOX_DATA_DIR: mkdtempSync(path.join(tmpdir(), 'pinbox-browser-')) },
     reuseExistingServer: false
   }
 });

@@ -12,14 +12,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="PinBox">
-  <link rel="stylesheet" href="/css/style.css?v=202611030123">
-  <script src="/js/html5-qrcode.min.js?v=202611030123"></script>
-  <script src="/js/qrcode.min.js?v=202611030123"></script>
-  <script src="/js/papaparse.min.js?v=202611030123"></script>
-  <script src="/js/sha256.min.js?v=202611030123"></script>
-  <script src="/js/local-db.js?v=202611030123"></script>
-  <script src="/js/local-api.js?v=202611030123"></script>
-  <script src="/js/api.js?v=202611030123"></script>
+  <link rel="stylesheet" href="/css/style.css?v=202611030124">
+  <script src="/js/html5-qrcode.min.js?v=202611030124"></script>
+  <script src="/js/qrcode.min.js?v=202611030124"></script>
+  <script src="/js/papaparse.min.js?v=202611030124"></script>
+  <script src="/js/sha256.min.js?v=202611030124"></script>
+  <script src="/js/local-db.js?v=202611030124"></script>
+  <script src="/js/local-api.js?v=202611030124"></script>
+  <script src="/js/api.js?v=202611030124"></script>
 </head>
 <body>
 
@@ -104,28 +104,28 @@
           <button class="clear-search-btn" id="btn-clear-search">✕</button>
         </div>
 
-        <!-- 分类：移动端横滑 chips / 桌面端下拉面板 -->
-        <div class="category-scroll" id="cat-chips">
-          <div class="cat-chip active" data-cat="">全部品类</div>
-        </div>
+        <div class="category-scroll" id="cat-chips" hidden></div>
+      </header>
+
+      <!-- 视图 1: 库存总览 -->
+      <main class="view-container active" id="view-stock">
+        <div class="stock-toolbar">
+          <div class="filter-controls-group">
         <div class="cat-dropdown" id="cat-dropdown">
-          <button class="btn-action btn-secondary btn-sm" id="btn-cat-dd" aria-expanded="false">
+          <button class="btn-action btn-secondary btn-sm cat-dropdown-trigger" id="btn-cat-dd" aria-expanded="false" aria-controls="cat-dd-panel">
             <svg style="width:13px;height:13px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
             <span id="btn-cat-dd-text">全部分类</span>
             <svg style="width:12px;height:12px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
           </button>
           <div class="cat-dd-panel" id="cat-dd-panel"></div>
         </div>
-      </header>
-
-      <!-- 视图 1: 库存总览 -->
-      <main class="view-container active" id="view-stock">
-        <div class="stock-toolbar">
+            <span class="toolbar-divider" aria-hidden="true"></span>
           <div class="quick-filters" id="quick-filters">
             <button class="qfilter active" data-filter="">全部</button>
             <button class="qfilter" data-filter="low_stock">低库存</button>
             <button class="qfilter" data-filter="zero_stock">零库存</button>
             <button class="qfilter" data-filter="unassigned">待归位</button>
+          </div>
           </div>
           <div class="toolbar-actions">
             <button class="btn-action btn-secondary btn-sm" id="btn-select-mode">
@@ -492,38 +492,63 @@
               </div>
             </div>
 
-          <!-- 数据中心：离线模式与同步 -->
-          <div class="panel">
-            <div class="panel-title">数据中心 · 离线与同步</div>
-            <p id="offline-readiness" class="panel-desc" role="status"></p>
-            <div class="panel-desc">原生 App 或受信任 HTTPS 下已缓存的 PWA 可使用本地离线库（数据只存本机）；回到局域网后把离线变更推送到服务器，或拉取服务器最新库存覆盖本机。<b>注意：手机需与服务器同一局域网（连家里 WiFi，4G 无法访问）；App 可使用 HTTP 或可信证书的 HTTPS 地址；HTTPS 网页须连接 HTTPS 服务器。</b></div>
-            <div class="sync-grid">
+          <!-- Current source, connection and explicit synchronization are separate actions. -->
+          <div class="panel data-center-panel">
+            <div class="panel-title-row">
+              <h2 class="panel-title">数据中心</h2>
+              <span class="data-mode-badge" id="current-data-badge">当前数据源</span>
+            </div>
+            <section class="dc-section dc-mode-section">
+              <div class="dc-section-header">
+                <div><h3 class="dc-section-title">正在使用的库存</h3><p class="dc-section-sub" id="current-data-source"></p></div>
+                <button class="btn-action btn-secondary btn-sm" id="btn-open-setup">使用方式设置</button>
+              </div>
+              <div class="scan-mode-seg" id="data-mode-seg">
+                <button data-mode="server">服务器在线</button>
+                <button data-mode="local">本机离线库</button>
+              </div>
+              <p class="mode-explanation">切换只改变读写位置，不会搬移、合并或清空两边的库存。</p>
+              <p id="offline-readiness" class="dc-section-sub" role="status"></p>
+            </section>
+            <section class="dc-section dc-config-section">
+              <div class="dc-section-header"><div><h3 class="dc-section-title">服务器连接</h3><p class="dc-section-sub">在线读写和离线同步使用同一组连接设置。</p></div></div>
               <div class="form-group">
-                <label class="form-label">运行模式</label>
-                <div class="scan-mode-seg" id="data-mode-seg" style="max-width: 260px;">
-                  <button data-mode="server">服务器在线</button>
-                  <button data-mode="local">本地离线</button>
+                <label class="form-label" for="input-server-url">服务器地址</label>
+                <input type="url" class="form-input" id="input-server-url" placeholder="http://服务器IP:8088" autocomplete="url" spellcheck="false">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="input-api-token">连接密钥</label>
+                <div class="key-input-wrap">
+                  <input type="password" class="form-input" id="input-api-token" autocomplete="off" spellcheck="false" placeholder="由服务器管理员提供">
+                  <button class="btn-action btn-secondary btn-sm" type="button" data-reveal="input-api-token" aria-pressed="false">显示</button>
+                </div>
+                <p class="setup-inline-help">共享仓库必须填写；持有密钥即可读写、备份和清空库存，请只交给可信的人。</p>
+              </div>
+              <div class="dc-action-row">
+                <button class="btn-action btn-secondary btn-sm" id="btn-sync-test">仅测试连接</button>
+                <button class="btn-action btn-primary btn-sm" id="btn-server-apply">应用连接设置</button>
+              </div>
+            </section>
+            <section class="dc-section dc-sync-section">
+              <div class="dc-section-header">
+                <div><h3 class="dc-section-title">离线库同步</h3><p class="dc-section-sub">同步前建议导出本机完整备份。冲突时保留待推送队列，不强行覆盖。</p></div>
+                <span class="pending-pill">待推送 <b id="pending-count">0</b> 条</span>
+              </div>
+              <div class="sync-cards-duo">
+                <div class="sync-card">
+                  <div class="sync-card-info"><h4>本机 → 服务器</h4><p>按顺序推送离线变更，已记账操作不会重复执行。</p></div>
+                  <div class="sync-card-btns"><button class="btn-action btn-primary btn-sm" id="btn-sync-push">推送离线变更</button><button class="btn-action btn-secondary btn-sm" id="btn-pending-details">查看明细</button></div>
+                </div>
+                <div class="sync-card">
+                  <div class="sync-card-info"><h4>服务器 → 本机</h4><p id="pull-mode-hint">用服务器快照替换本机库；有待推送操作时禁止覆盖。</p></div>
+                  <div class="sync-card-btns"><button class="btn-action btn-secondary btn-sm" id="btn-sync-pull">从服务器拉取</button></div>
                 </div>
               </div>
-              <div class="form-group" style="flex: 1; min-width: 220px;">
-                <label class="form-label">服务器地址（在线读写 / 离线同步）</label>
-                <input type="text" class="form-input" id="input-server-url" placeholder="http://服务器IP:8088">
-              </div>
-            </div>
-            <div class="form-group">
-              <label for="input-api-token">服务器访问令牌（服务器启用时填写）</label>
-              <input type="password" class="form-input" id="input-api-token" autocomplete="off" placeholder="启用认证时必填；应用连接设置后保存">
-            </div>
-            <div class="sync-actions">
-              <button class="btn-action btn-secondary btn-sm" id="btn-sync-test">仅测试连接</button>
-              <button class="btn-action btn-secondary btn-sm" id="btn-server-apply">应用连接设置</button>
-              <button class="btn-action btn-secondary btn-sm" id="btn-online-recover">核对在线操作</button>
-              <button class="btn-action btn-secondary btn-sm" id="btn-pending-details">查看待推送明细</button>
-              <button class="btn-action btn-secondary btn-sm" id="btn-sync-pull">从服务器拉取</button>
-              <button class="btn-action btn-primary btn-sm" id="btn-sync-push">推送离线变更 (<span id="pending-count">0</span>)</button>
-            </div>
-            <pre id="pending-details" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;"></pre>
-            <div class="sync-status" id="sync-status" role="status"></div>
+              <pre id="pending-details" class="pending-details-box" hidden></pre>
+              <div class="online-recover-row"><span>网络中断后不确定在线操作是否入账？</span><button class="btn-action btn-secondary btn-sm" id="btn-online-recover">核对在线操作</button></div>
+            </section>
+            <div class="sync-status" id="sync-status" role="status" aria-live="polite"></div>
+            <div class="dc-notice-box">手机需要能访问服务器所在网络。推荐受信任 HTTPS；HTTP 不加密密钥和库存，不要直接暴露到公网。</div>
           </div>
 
           <div class="about-card" id="about-card">加载中…</div>
@@ -795,6 +820,54 @@ C25703 5 ..."></textarea>
     </div>
   </div>
 
+  <div class="modal-overlay" id="setup-wizard-modal">
+    <div class="modal-content modal-content-setup">
+      <div class="modal-header">
+        <span class="setup-badge">PINBOX / GET STARTED</span>
+        <button class="btn-close" id="btn-close-setup" aria-label="关闭使用方式设置">✕</button>
+      </div>
+      <h2 class="setup-header-title">你的库存，准备放在哪里？</h2>
+      <p class="setup-subtitle">一个人轻装使用，或让多台设备连接同一份库存。以后随时可以调整。</p>
+      <p class="setup-existing-note" id="setup-existing-note" hidden></p>
+      <div class="setup-cards-grid">
+        <section class="setup-card" id="setup-card-local">
+          <div class="setup-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="3" width="16" height="12" rx="2"/><path d="M8 21h8m-4-6v6"/></svg></div>
+          <div class="setup-card-content"><span class="setup-card-tag">无需服务器 · 无需密钥</span><h3 class="setup-card-name">独立使用</h3><p class="setup-card-desc" id="setup-local-description">库存保存在这台设备，可建档、扫码和核对 BOM。请定期导出备份。</p></div>
+          <button class="btn-action btn-primary setup-action-btn" id="btn-setup-local">开始独立使用</button>
+        </section>
+        <section class="setup-card" id="setup-card-shared">
+          <div class="setup-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="2" width="10" height="6" rx="1.5"/><rect x="2" y="16" width="7" height="6" rx="1.5"/><rect x="15" y="16" width="7" height="6" rx="1.5"/><path d="M12 8v4M5 16v-4h14v4"/></svg></div>
+          <div class="setup-card-content"><span class="setup-card-tag">手机 · 电脑 · 共享仓库</span><h3 class="setup-card-name">多设备使用</h3><p class="setup-card-desc">连接已有服务器，或在电脑、NAS、小主机上部署一个共享仓库。</p></div>
+          <button class="btn-action btn-secondary setup-action-btn" id="btn-setup-shared" aria-expanded="false" aria-controls="setup-shared-panel">设置多设备连接</button>
+        </section>
+      </div>
+      <section class="setup-expand-panel" id="setup-shared-panel" hidden>
+        <div class="setup-subtabs" role="tablist" aria-label="多设备设置">
+          <button class="setup-subtab active" id="setup-tab-connect" role="tab" aria-selected="true" aria-controls="setup-connect-pane">连接已有仓库</button>
+          <button class="setup-subtab" id="setup-tab-host" role="tab" aria-selected="false" aria-controls="setup-host-pane">部署新仓库</button>
+        </div>
+        <div id="setup-connect-pane" role="tabpanel" aria-labelledby="setup-tab-connect">
+          <div class="form-group"><label class="form-label" for="setup-server-url">服务器地址</label><input id="setup-server-url" class="form-input" type="url" placeholder="http://服务器IP:8088" autocomplete="url" spellcheck="false"></div>
+          <div class="form-group"><label class="form-label" for="setup-api-token">连接密钥</label><div class="key-input-wrap"><input id="setup-api-token" class="form-input" type="password" placeholder="粘贴管理员提供的连接密钥" autocomplete="off" spellcheck="false"><button type="button" class="btn-action btn-secondary btn-sm" data-reveal="setup-api-token" aria-pressed="false">显示</button></div></div>
+          <p class="setup-inline-help">密钥由部署脚本自动生成，无需注册。请向管理员索取；不会放进网址或二维码。持有者拥有库存读写和数据管理权限。</p>
+          <div class="setup-button-row"><button id="btn-setup-test" class="btn-action btn-secondary">仅测试连接</button><button id="btn-setup-connect" class="btn-action btn-primary">连接并使用服务器</button></div>
+        </div>
+        <div id="setup-host-pane" role="tabpanel" aria-labelledby="setup-tab-host" hidden>
+          <div class="setup-guide-steps">
+            <div class="guide-step"><span class="step-num">01</span><div class="step-desc"><b>选择一台常开的主机</b><p>电脑、NAS 或 Linux 小主机。手机仅作为客户端，不负责托管服务器。</p></div></div>
+            <div class="guide-step"><span class="step-num">02</span><div class="step-desc"><b>部署并获取连接密钥</b><p>安装 Docker Engine 和 Compose 插件后，在主机终端执行：</p><pre class="setup-code">git clone https://github.com/Chinachani/PinBox.git
+cd PinBox
+./install.sh</pre><p>首次交互安装会显示新密钥；以后可在私有终端运行 <code>./install.sh token show</code> 查看。</p></div></div>
+            <div class="guide-step"><span class="step-num">03</span><div class="step-desc"><b>其他设备连接这个仓库</b><p>使用主机的局域网 IP（不是 localhost），将地址和密钥填入「连接已有仓库」。推荐可信 HTTPS；HTTP 无法保护传输中的密钥。</p></div></div>
+          </div>
+          <a class="setup-inline-help" href="https://github.com/Chinachani/PinBox#-快速开始" target="_blank" rel="noopener noreferrer">查看完整部署文档（含 Windows / Linux 成品程序） ↗</a>
+        </div>
+        <p class="setup-hint-status" id="setup-status" role="status" aria-live="polite"></p>
+      </section>
+      <p class="setup-footer-note">切换使用方式不会自动同步或迁移库存。已有数据请先备份，再在数据中心手动推送或拉取。</p>
+    </div>
+  </div>
+
   <!-- 通用确认弹窗 -->
   <div class="modal-overlay" id="confirm-modal">
     <div class="modal-content modal-content-sm">
@@ -818,6 +891,7 @@ C25703 5 ..."></textarea>
 
   <div class="toast" id="toast">操作成功</div>
 
-  <script src="/js/app.js?v=202611030123"></script>
+  <script src="/js/setup.js?v=202611030124"></script>
+  <script src="/js/app.js?v=202611030124"></script>
 </body>
 </html>

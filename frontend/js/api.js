@@ -1,4 +1,4 @@
-const APP_VERSION = '1.0.23';
+const APP_VERSION = '1.0.24';
 
 function isStandaloneApp() {
   return !!window.Capacitor?.isNativePlatform?.() || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -23,7 +23,7 @@ function resolveSyncBase(raw) {
 
 function serverHeaders(extra = {}) {
   const headers = new Headers(extra);
-  const token = localStorage.getItem('wms-api-token');
+  const token = DataLayer.token;
   if (token && !headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
   return Object.fromEntries(headers);
 }
@@ -65,9 +65,11 @@ async function serverRequest(base, path, opts = {}) {
   return fetch(base + path, { ...fetchOpts, headers: serverHeaders(opts.headers), signal: opts.signal || AbortSignal.timeout(30000) });
 }
 
+let dataWritesInFlight = 0;
 const DataLayer = {
   mode: localStorage.getItem('wms-mode') || (isStandaloneApp() ? 'local' : 'server'),
   serverUrl: localStorage.getItem('wms-server-url') || '',
+  token: localStorage.getItem('wms-api-token') || '',
   setMode(mode) {
     if (!['server', 'local'].includes(mode)) throw new Error('无效数据模式');
     this.mode = mode;
@@ -77,11 +79,23 @@ const DataLayer = {
     this.serverUrl = resolveSyncBase(value);
     localStorage.setItem('wms-server-url', this.serverUrl);
   },
+  setToken(value) {
+    this.token = String(value || '').trim();
+    if (this.token) localStorage.setItem('wms-api-token', this.token);
+    else localStorage.removeItem('wms-api-token');
+  },
   async api(path, opts = {}) {
-    if (this.mode === 'local') return LocalAPI.handle(opts.method || 'GET', path, opts);
-    if (opts.method?.toUpperCase() === 'POST' && /^\/api\/materials\/[^/]+\/stock$/.test(path))
-      return durableStockRequest(path, opts);
-    return serverRequest(resolveSyncBase(this.serverUrl), path, opts);
+    const run = () => {
+      if (this.mode === 'local') return LocalAPI.handle(opts.method || 'GET', path, opts);
+      if (opts.method?.toUpperCase() === 'POST' && /^\/api\/materials\/[^/]+\/stock$/.test(path))
+        return durableStockRequest(path, opts);
+      return serverRequest(resolveSyncBase(this.serverUrl), path, opts);
+    };
+    if (!opts.method || ['GET', 'HEAD'].includes(opts.method.toUpperCase())) return run();
+    dataWritesInFlight++;
+    try {
+      return await (navigator.locks ? navigator.locks.request('pinbox-data-write', { mode: 'shared' }, run) : run());
+    } finally { dataWritesInFlight--; }
   }
 };
 
@@ -93,7 +107,7 @@ function syncBase() {
   return resolveSyncBase(DataLayer.serverUrl) || (isNativeHttpAvailable() ? '' : location.origin);
 }
 
-async function syncTestConnection(rawBase = DataLayer.serverUrl, token = localStorage.getItem('wms-api-token') || '') {
+async function syncTestConnection(rawBase = DataLayer.serverUrl, token = DataLayer.token) {
   try {
     const base = resolveSyncBase(rawBase) || (isNativeHttpAvailable() ? '' : location.origin);
     if (!base) throw new Error('请先填写服务器地址');

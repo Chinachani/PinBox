@@ -298,6 +298,21 @@ test('connection testing neither saves nor changes the live data source or token
   assert.equal(called.opts.headers.authorization, 'Bearer draft');
 });
 
+test('another window changing settings cannot mix a new key with the old server URL', async () => {
+  const r = runtime();
+  r.DataLayer.setServerUrl('http://original.test');
+  r.DataLayer.setToken('original-private-key');
+  r.ctx.localStorage.setItem('wms-api-token', 'new-server-key');
+  r.ctx.localStorage.setItem('wms-server-url', 'http://new.test');
+  let sent;
+  r.ctx.fetch = async (url, opts) => {
+    sent = { url, token: new Headers(opts.headers).get('Authorization') };
+    return new Response(JSON.stringify({ total_sku: 0, total_pieces: 0 }));
+  };
+  await vm.runInContext('syncTestConnection()', r.ctx);
+  assert.deepEqual(sent, { url: 'http://original.test/api/stats', token: 'Bearer original-private-key' });
+});
+
 test('local validation trims text and enforces server field lengths before queuing', async () => {
   const r = runtime();
   for (const fields of [{ code: 'C'.repeat(129) }, { model: 'x'.repeat(2001) }, { location: 'x'.repeat(257) }]) {

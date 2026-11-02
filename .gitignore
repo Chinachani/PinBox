@@ -68,3 +68,8 @@ data/backups/
 test-results/
 playwright-report/
 /*.spec
+
+# Private deployment access configuration
+data/access.json
+data/access.json.lock
+.env.lock

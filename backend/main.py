@@ -1,6 +1,11 @@
 import os
 import sys
 
+sys.path.append(os.path.dirname(__file__))
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] in {"setup", "status", "token"}:
+    from manage import main as manage_main
+    raise SystemExit(manage_main(sys.argv[1:]))
+
 # PyInstaller's Windows GUI bootloader has no console streams; Uvicorn's logger needs them.
 if getattr(sys, "frozen", False):
     if sys.stdout is None:
@@ -18,6 +23,8 @@ import threading
 import secrets
 import hashlib
 import asyncio
+import ipaddress
+import access
 from contextlib import closing
 from uuid import uuid4
 from datetime import datetime, timedelta
@@ -37,6 +44,35 @@ from schemas import MaterialCreate, MaterialUpdate, OnlineMaterialUpdate, StockC
 from sync import apply_operation, dataset_id
 from importer import import_records
 import bom as bom_engine
+
+access.initialize(default_mode="standalone" if getattr(sys, "frozen", False) else "shared")
+
+
+def is_loopback(host):
+    try:
+        address = ipaddress.ip_address(host)
+        return address.is_loopback or bool(getattr(address, "ipv4_mapped", None) and address.ipv4_mapped.is_loopback)
+    except (ValueError, TypeError):
+        return False
+
+
+def local_connection(connection):
+    # Peer checks alone do not stop a hostile website rebinding its DNS to localhost.
+    try:
+        hostname = connection.url.hostname
+    except ValueError:
+        return False
+    return bool(connection.client and is_loopback(connection.client.host) and
+                (hostname == "localhost" or is_loopback(hostname)))
+
+
+def server_bind_host():
+    mode = access.current()["mode"]
+    host = os.environ.get("PINBOX_HOST") or ("127.0.0.1" if mode == "standalone" else "0.0.0.0")
+    if mode == "standalone" and not is_loopback(host):
+        raise access.AccessError("Standalone mode requires a loopback PINBOX_HOST (127.0.0.1 or ::1). Choose shared mode for network access.")
+    return host
+
 
 app = FastAPI(title="LCSC Mini WMS", description="嘉立创元器件掌上出入库与库存管理系统")
 
@@ -90,7 +126,12 @@ async def ws_endpoint(ws: WebSocket):
     origin = ws.headers.get("origin")
     allowed = {str(ws.base_url).replace('ws:', 'http:').replace('wss:', 'https:').rstrip('/'), "https://localhost", "http://localhost", "capacitor://localhost"}
     allowed.update(s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip())
-    if os.environ.get("PINBOX_API_TOKEN") or (origin and origin not in allowed):
+    try:
+        settings = access.current()
+    except (access.AccessError, OSError, UnicodeError):
+        await ws.close(code=1011)
+        return
+    if settings["token"] or (settings["mode"] == "standalone" and not local_connection(ws)) or (origin and origin not in allowed):
         await ws.close(code=1008)
         return
     await hub.connect(ws)
@@ -106,14 +147,22 @@ async def ws_endpoint(ws: WebSocket):
 @app.middleware("http")
 async def protect_api(request: Request, call_next):
     if request.url.path.startswith("/api/"):
-        token = os.environ.get("PINBOX_API_TOKEN", "")
-        if token and request.method != "OPTIONS" and not secrets.compare_digest(request.headers.get("authorization", "").encode(), ("Bearer " + token).encode()):
-            return JSONResponse({"detail": "需要有效的服务器访问令牌"}, status_code=401)
+        try:
+            settings = access.current()
+        except (access.AccessError, OSError, UnicodeError):
+            return JSONResponse({"detail": "访问配置不可用，请在服务器修复配置后重试"}, status_code=503, headers={"Cache-Control": "no-store"})
+        if settings["mode"] == "standalone" and not local_connection(request):
+            return JSONResponse({"detail": "独立使用模式仅允许本机访问"}, status_code=403)
         origin = request.headers.get("origin")
         allowed = {str(request.base_url).rstrip("/"), "https://localhost", "http://localhost", "capacitor://localhost"}
         allowed.update(s.strip() for s in os.environ.get("PINBOX_ALLOWED_ORIGINS", "").split(",") if s.strip())
         if origin and origin not in allowed:
             return JSONResponse({"detail": "不允许此来源访问服务器"}, status_code=403)
+        public_instance = request.method == "GET" and request.url.path == "/api/instance"
+        token = settings["token"]
+        if token and not public_instance and request.method != "OPTIONS" and not secrets.compare_digest(request.headers.get("authorization", "").encode(), ("Bearer " + token).encode()):
+            return JSONResponse({"detail": "需要有效的服务器连接密钥"}, status_code=401)
+        request.state.access_settings = settings
     return await call_next(request)
 
 # 允许跨域（方便局域网内任意客户端调用）
@@ -124,6 +173,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def guard_local_preflight(request: Request, call_next):
+    # CORS handles OPTIONS before protect_api; still enforce the local-only boundary.
+    if request.method == "OPTIONS" and request.url.path.startswith("/api/"):
+        try:
+            settings = access.current()
+        except (access.AccessError, OSError, UnicodeError):
+            return JSONResponse({"detail": "访问配置不可用，请在服务器修复配置后重试"}, status_code=503)
+        if settings["mode"] == "standalone" and not local_connection(request):
+            return JSONResponse({"detail": "独立使用模式仅允许本机访问"}, status_code=403)
+    return await call_next(request)
 
 
 # 初始化数据库
@@ -1075,6 +1137,13 @@ def backup_now():
 
 # --- 版本信息 ---
 
+@app.get("/api/instance")
+def instance_metadata(request: Request):
+    settings = request.state.access_settings
+    return JSONResponse({"mode": settings["mode"], "auth_required": bool(settings["token"]),
+                         "version": get_version()["version"]}, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/version")
 def get_version():
     pkg_path = os.path.join(APP_DIR, "package.json")
@@ -1347,13 +1416,15 @@ if __name__ == "__main__":
     cert_file = os.environ.get("PINBOX_CERT_FILE", os.path.join(APP_DIR, "certs", "cert.pem"))
     key_file = os.environ.get("PINBOX_KEY_FILE", os.path.join(APP_DIR, "certs", "key.pem"))
 
+    bind_host = server_bind_host()
+
     # 每日 03:00 自动备份
     _backup_scheduler()
 
     # 双协议并发监听：HTTP (8088) + HTTPS (8089)
     if os.path.exists(cert_file) and os.path.exists(key_file):
         def start_https():
-            config = uvicorn.Config(app, host="0.0.0.0", port=8089, ssl_certfile=cert_file, ssl_keyfile=key_file)
+            config = uvicorn.Config(app, host=bind_host, port=8089, ssl_certfile=cert_file, ssl_keyfile=key_file)
             server = uvicorn.Server(config)
             server.run()
         t = threading.Thread(target=start_https, daemon=True)
@@ -1372,4 +1443,4 @@ if __name__ == "__main__":
                 except OSError:
                     time.sleep(0.5)
         threading.Thread(target=open_browser, daemon=True).start()
-    uvicorn.run(app, host=os.environ.get("PINBOX_HOST", "127.0.0.1" if getattr(sys, "frozen", False) else "0.0.0.0"), port=8088)
+    uvicorn.run(app, host=bind_host, port=8088)

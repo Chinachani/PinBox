@@ -1,9 +1,10 @@
-const CACHE_NAME = 'pinbox-wms-v1.0.23';
+const CACHE_NAME = 'pinbox-wms-v1.0.24';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/css/style.css',
   '/js/app.js',
+  '/js/setup.js',
   '/js/html5-qrcode.min.js',
   '/js/qrcode.min.js',
   '/js/local-db.js',

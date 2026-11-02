@@ -44,6 +44,8 @@ jobs:
           curl -fsS -H 'Authorization: Bearer test-only' http://127.0.0.1:18088/api/version
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18088/api/stats)" = 401
           docker rm -f pinbox-ci
+      - name: Verify First Install, Update and Key Rotation
+        run: python scripts/smoke-install.py
       - run: npm audit --audit-level=moderate
       - run: pip-audit --no-deps --disable-pip -r backend/requirements.lock
 
@@ -85,6 +87,24 @@ jobs:
             --hidden-import "zxingcpp" `
             --hidden-import "PIL" `
             backend/main.py
+
+      - name: Build Console Administration Tool
+        run: |
+          pyinstaller --noconfirm --onefile --console `
+            --name "PinBoxAdmin" `
+            --distpath "dist/PinBox" `
+            --workpath "build/admin" `
+            backend/manage.py
+
+      - name: Verify Administration Tool Without Touching Inventory
+        run: |
+          $env:PINBOX_DATA_DIR = "$env:RUNNER_TEMP/pinbox-admin-test"
+          & dist/PinBox/PinBoxAdmin.exe setup --mode shared --json
+          if ($LASTEXITCODE -ne 0) { throw "Admin setup failed" }
+          & dist/PinBox/PinBoxAdmin.exe status --json
+          if ($LASTEXITCODE -ne 0) { throw "Admin status failed" }
+          if (Test-Path "$env:PINBOX_DATA_DIR/inventory.db") { throw "Setup touched inventory" }
+          Remove-Item Env:PINBOX_DATA_DIR
 
       - name: Archive Windows Artifact
         run: |
