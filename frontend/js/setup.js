@@ -4,6 +4,7 @@ const Setup = {
   instance: null,
   bound: false,
   busy: false,
+  currentChoice: null,
   epoch: 0,
   async inspectInstance() {
     if (window.Capacitor?.isNativePlatform?.()) return null;
@@ -32,7 +33,6 @@ const Setup = {
     const instance = await this.inspectInstance();
     if (epoch !== this.epoch) return;
     this.instance = instance;
-    this.setBusy(false);
     const desktopLocal = this.instance?.mode === 'standalone' && !this.instance.auth_required;
     this.independentMode = desktopLocal && DataLayer.mode !== 'local' ? 'server' : 'local';
     $('setup-local-description').textContent = this.independentMode === 'server'
@@ -40,6 +40,24 @@ const Setup = {
       : '库存保存在此设备的本机离线库（IndexedDB）。不连接服务器，请定期导出完整备份。';
     const pending = await syncPendingCount();
     const count = await LocalDB.count('materials');
+    if (epoch !== this.epoch) return;
+    this.currentChoice = null;
+    if (!this.required && !DataLayer.settingsError) {
+      let sameServer = false;
+      try { sameServer = !DataLayer.serverUrl || resolveSyncBase(DataLayer.serverUrl) === resolveSyncBase(location.origin); }
+      catch (_) { /* A broken legacy address is not a verified current destination. */ }
+      if (DataLayer.mode === 'local' || (desktopLocal && sameServer)) this.currentChoice = 'local';
+      else if (this.instance || !sameServer || window.Capacitor?.isNativePlatform?.()) this.currentChoice = 'shared';
+    }
+    for (const choice of ['local', 'shared']) {
+      const current = choice === this.currentChoice;
+      $('setup-card-' + choice).classList.toggle('is-current', current);
+      $('setup-card-' + choice).setAttribute('aria-current', String(current));
+      $('setup-current-' + choice).hidden = !current;
+    }
+    $('btn-setup-local').textContent = this.currentChoice === 'local' ? '正在独立使用' : '开始独立使用';
+    $('btn-setup-shared').textContent = this.currentChoice === 'shared' ? '管理多设备连接' : '设置多设备连接';
+    this.setBusy(false);
     $('setup-existing-note').hidden = this.required && !count && !pending;
     $('setup-existing-note').textContent = `本机离线库：${count} 款物料，${pending} 条待推送。更换连接不会自动推送或清空它们。`;
     $('btn-close-setup').hidden = this.required;
@@ -50,7 +68,7 @@ const Setup = {
     $('btn-setup-shared').setAttribute('aria-expanded', 'false');
     this.status(DataLayer.settingsError || '', !DataLayer.settingsError);
     openModal('setup-wizard-modal');
-    $('btn-setup-local').focus();
+    $('setup-title').focus();
   },
   hideKeys() {
     document.querySelectorAll('[data-reveal]').forEach(button => {
@@ -67,6 +85,7 @@ const Setup = {
   setBusy(value) {
     this.busy = value;
     ['btn-setup-local', 'btn-setup-test', 'btn-setup-connect'].forEach(id => { $(id).disabled = value; });
+    $('btn-setup-local').disabled = value || this.currentChoice === 'local';
   },
   status(message, ok = true) {
     $('setup-status').textContent = message;

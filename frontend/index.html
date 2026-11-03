@@ -12,14 +12,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="PinBox">
-  <link rel="stylesheet" href="/css/style.css?v=202611030125">
-  <script src="/js/html5-qrcode.min.js?v=202611030125"></script>
-  <script src="/js/qrcode.min.js?v=202611030125"></script>
-  <script src="/js/papaparse.min.js?v=202611030125"></script>
-  <script src="/js/sha256.min.js?v=202611030125"></script>
-  <script src="/js/local-db.js?v=202611030125"></script>
-  <script src="/js/local-api.js?v=202611030125"></script>
-  <script src="/js/api.js?v=202611030125"></script>
+  <link rel="stylesheet" href="/css/style.css?v=202611030126">
+  <script src="/js/html5-qrcode.min.js?v=202611030126"></script>
+  <script src="/js/qrcode.min.js?v=202611030126"></script>
+  <script src="/js/papaparse.min.js?v=202611030126"></script>
+  <script src="/js/sha256.min.js?v=202611030126"></script>
+  <script src="/js/local-db.js?v=202611030126"></script>
+  <script src="/js/local-api.js?v=202611030126"></script>
+  <script src="/js/api.js?v=202611030126"></script>
 </head>
 <body>
 
@@ -503,9 +503,9 @@
                 <div><h3 class="dc-section-title">正在使用的库存</h3><p class="dc-section-sub" id="current-data-source"></p></div>
                 <button class="btn-action btn-secondary btn-sm" id="btn-open-setup">使用方式设置</button>
               </div>
-              <div class="scan-mode-seg" id="data-mode-seg">
-                <button data-mode="server">服务器在线</button>
-                <button data-mode="local">本机离线库</button>
+              <div class="scan-mode-seg" id="data-mode-seg" role="group" aria-label="当前库存读写位置">
+                <button data-mode="server" aria-pressed="false">服务器在线<span class="mode-current-label" aria-hidden="true">当前</span></button>
+                <button data-mode="local" aria-pressed="false">本机离线库<span class="mode-current-label" aria-hidden="true">当前</span></button>
               </div>
               <p class="mode-explanation">切换只改变读写位置，不会搬移、合并或清空两边的库存。</p>
               <p id="offline-readiness" class="dc-section-sub" role="status"></p>
@@ -526,18 +526,19 @@
               </div>
               <div class="dc-action-row">
                 <button class="btn-action btn-secondary btn-sm" id="btn-sync-test">仅测试连接</button>
-                <button class="btn-action btn-primary btn-sm" id="btn-server-apply">应用连接设置</button>
+                <button class="btn-action btn-secondary btn-sm" id="btn-server-apply" aria-describedby="connection-draft-hint" disabled>应用连接设置</button>
               </div>
+              <p class="setup-inline-help" id="connection-draft-hint" role="status">连接设置未改动。</p>
             </section>
             <section class="dc-section dc-sync-section">
               <div class="dc-section-header">
                 <div><h3 class="dc-section-title">离线库同步</h3><p class="dc-section-sub">同步前建议导出本机完整备份。冲突时保留待推送队列，不强行覆盖。</p></div>
-                <span class="pending-pill">待推送 <b id="pending-count">0</b> 条</span>
+                <span class="pending-pill is-empty">待推送 <b id="pending-count">0</b> 条</span>
               </div>
               <div class="sync-cards-duo">
                 <div class="sync-card">
-                  <div class="sync-card-info"><h4>本机 → 服务器</h4><p>按顺序推送离线变更，已记账操作不会重复执行。</p></div>
-                  <div class="sync-card-btns"><button class="btn-action btn-primary btn-sm" id="btn-sync-push">推送离线变更</button><button class="btn-action btn-secondary btn-sm" id="btn-pending-details">查看明细</button></div>
+                  <div class="sync-card-info"><h4>本机 → 服务器</h4><p id="push-mode-hint">正在检查待推送操作…</p></div>
+                  <div class="sync-card-btns"><button class="btn-action btn-secondary btn-sm" id="btn-sync-push" aria-describedby="push-mode-hint" disabled>推送离线变更</button><button class="btn-action btn-secondary btn-sm" id="btn-pending-details">查看明细</button></div>
                 </div>
                 <div class="sync-card">
                   <div class="sync-card-info"><h4>服务器 → 本机</h4><p id="pull-mode-hint">用服务器快照替换本机库；有待推送操作时禁止覆盖。</p></div>
@@ -826,18 +827,18 @@ C25703 5 ..."></textarea>
         <span class="setup-badge">PINBOX / GET STARTED</span>
         <button class="btn-close" id="btn-close-setup" aria-label="关闭使用方式设置">✕</button>
       </div>
-      <h2 class="setup-header-title">你的库存，准备放在哪里？</h2>
+      <h2 class="setup-header-title" id="setup-title" tabindex="-1">你的库存，准备放在哪里？</h2>
       <p class="setup-subtitle">一个人轻装使用，或让多台设备连接同一份库存。以后随时可以调整。</p>
       <p class="setup-existing-note" id="setup-existing-note" hidden></p>
       <div class="setup-cards-grid">
         <section class="setup-card" id="setup-card-local">
           <div class="setup-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="3" width="16" height="12" rx="2"/><path d="M8 21h8m-4-6v6"/></svg></div>
-          <div class="setup-card-content"><span class="setup-card-tag">无需服务器 · 无需密钥</span><h3 class="setup-card-name">独立使用</h3><p class="setup-card-desc" id="setup-local-description">库存保存在这台设备，可建档、扫码和核对 BOM。请定期导出备份。</p></div>
-          <button class="btn-action btn-primary setup-action-btn" id="btn-setup-local">开始独立使用</button>
+          <div class="setup-card-content"><span class="setup-card-tag">无需服务器 · 无需密钥</span><h3 class="setup-card-name">独立使用 <span class="setup-current-label" id="setup-current-local" hidden>当前使用</span></h3><p class="setup-card-desc" id="setup-local-description">库存保存在这台设备，可建档、扫码和核对 BOM。请定期导出备份。</p></div>
+          <button class="btn-action btn-secondary setup-action-btn" id="btn-setup-local">开始独立使用</button>
         </section>
         <section class="setup-card" id="setup-card-shared">
           <div class="setup-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="2" width="10" height="6" rx="1.5"/><rect x="2" y="16" width="7" height="6" rx="1.5"/><rect x="15" y="16" width="7" height="6" rx="1.5"/><path d="M12 8v4M5 16v-4h14v4"/></svg></div>
-          <div class="setup-card-content"><span class="setup-card-tag">手机 · 电脑 · 共享仓库</span><h3 class="setup-card-name">多设备使用</h3><p class="setup-card-desc">连接已有服务器，或在电脑、NAS、小主机上部署一个共享仓库。</p></div>
+          <div class="setup-card-content"><span class="setup-card-tag">手机 · 电脑 · 共享仓库</span><h3 class="setup-card-name">多设备使用 <span class="setup-current-label" id="setup-current-shared" hidden>当前使用</span></h3><p class="setup-card-desc">连接已有服务器，或在电脑、NAS、小主机上部署一个共享仓库。</p></div>
           <button class="btn-action btn-secondary setup-action-btn" id="btn-setup-shared" aria-expanded="false" aria-controls="setup-shared-panel">设置多设备连接</button>
         </section>
       </div>
@@ -891,7 +892,7 @@ cd PinBox
 
   <div class="toast" id="toast">操作成功</div>
 
-  <script src="/js/setup.js?v=202611030125"></script>
-  <script src="/js/app.js?v=202611030125"></script>
+  <script src="/js/setup.js?v=202611030126"></script>
+  <script src="/js/app.js?v=202611030126"></script>
 </body>
 </html>

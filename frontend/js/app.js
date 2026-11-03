@@ -2849,12 +2849,15 @@ function initToolPanels() {
 }
 
 // ---------- 21. 数据中心：离线模式与同步 ----------
+let dataCenterBusy = false;
+let pendingCountValue = null;
+let pendingCountRequest = 0;
+
 function initModeUI() {
   const seg = $('data-mode-seg');
   if (!seg) return;
   seg.querySelectorAll('button').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === DataLayer.mode);
-    b.onclick = async () => {
+    b.onclick = () => runDataCenterAction(async () => {
       const target = b.dataset.mode;
       if (target === DataLayer.mode) return;
       try {
@@ -2865,15 +2868,15 @@ function initModeUI() {
         }
         await commitDataSettings({ mode: target });
       } catch (error) { setSyncStatus(error.message, false); }
-    };
+    });
   });
 
   $('input-server-url').value = DataLayer.serverUrl || '';
-  $('btn-sync-test').onclick = async () => {
+  $('btn-sync-test').onclick = () => runDataCenterAction(async () => {
     const r = await syncTestConnection($('input-server-url').value, $('input-api-token').value.trim());
     setSyncStatus(r.msg + '（仅测试，未改变数据源）', r.ok);
-  };
-  $('btn-sync-pull').onclick = async () => {
+  });
+  $('btn-sync-pull').onclick = () => runDataCenterAction(async () => {
     if (!requireSavedServerSettings()) return;
     if (DataLayer.mode === 'server') {
       setSyncStatus('当前已是服务器模式，无需拉取', false);
@@ -2888,15 +2891,14 @@ function initModeUI() {
       state.initialLoaded = false;
       loadStats(); loadCategories(); loadMaterials(); loadLocations(); loadDashboard(); loadRecentLogs(); loadRestock(); loadProjectStats();
     }
-  };
-  $('btn-sync-push').onclick = async () => {
+  });
+  $('btn-sync-push').onclick = () => runDataCenterAction(async () => {
     if (!requireSavedServerSettings()) return;
     setSyncStatus('正在推送离线变更…', true);
     const r = await syncPushOps();
     setSyncStatus(r.msg, r.ok);
-    updatePendingCount();
-  };
-  $('btn-server-apply').onclick = saveServerSettings;
+  });
+  $('btn-server-apply').onclick = () => runDataCenterAction(saveServerSettings);
   $('btn-online-recover').onclick = async () => {
     try {
       const pending = await LocalDB.get('online_ops', syncBase());
@@ -2934,14 +2936,78 @@ function initModeUI() {
     box.hidden = !box.hidden;
     box.textContent = ops.length ? JSON.stringify(ops, null, 2) : '没有待推送操作';
   };
-  updatePendingCount();
   $('input-api-token').value = DataLayer.token;
+  for (const id of ['input-server-url', 'input-api-token']) {
+    $(id).addEventListener('input', renderDataCenterActions);
+    $(id).addEventListener('change', renderDataCenterActions);
+  }
+  renderDataSource();
+  updatePendingCount();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) updatePendingCount(); });
   const readiness = $('offline-readiness');
   if (window.Capacitor?.isNativePlatform?.()) readiness.textContent = '原生 App：支持本地离线库；请定期导出备份。';
   else if (!window.isSecureContext) readiness.textContent = '当前 HTTP 仅为网页快捷方式，不具备 PWA 离线启动能力；请使用受信任 HTTPS 或原生 App。';
   else {
     readiness.textContent = '正在检查离线资源缓存…';
     navigator.serviceWorker?.ready.then(() => { readiness.textContent = '离线资源已就绪；离线库存仍需选择本地模式并拉取或导入。'; });
+  }
+}
+
+function connectionDraftState() {
+  const token = $('input-api-token').value.trim();
+  const raw = $('input-server-url').value.trim();
+  try {
+    const url = resolveSyncBase(raw);
+    return { dirty: url !== DataLayer.serverUrl || token !== DataLayer.token,
+      valid: !!url || !window.Capacitor?.isNativePlatform?.() };
+  } catch (_) {
+    return { dirty: raw !== DataLayer.serverUrl || token !== DataLayer.token, valid: false };
+  }
+}
+
+function renderDataCenterActions() {
+  const draft = connectionDraftState();
+  const busy = dataCenterBusy || syncInFlight;
+  const ready = !busy && !draft.dirty && draft.valid && !DataLayer.settingsError;
+  const emphasize = (button, active) => {
+    button.classList.toggle('btn-primary', active);
+    button.classList.toggle('btn-secondary', !active);
+  };
+  const apply = $('btn-server-apply');
+  apply.disabled = busy || !draft.dirty || !draft.valid;
+  emphasize(apply, !apply.disabled);
+  $('connection-draft-hint').textContent = !draft.valid ? '请填写有效的服务器地址；当前连接未改变。'
+    : draft.dirty ? '有未应用的连接修改；测试不会保存，也不会切换库存。' : '连接设置未改动。';
+  $('btn-sync-test').disabled = busy || !draft.valid;
+  $$('#data-mode-seg button').forEach(button => { button.disabled = busy; });
+  const push = $('btn-sync-push');
+  push.disabled = !ready || !(pendingCountValue > 0);
+  emphasize(push, !push.disabled);
+  $('pending-count').closest('.pending-pill').classList.toggle('is-empty', !(pendingCountValue > 0));
+  $('push-mode-hint').textContent = pendingCountValue === null ? '暂未取得待推送数量，请稍后重试。'
+    : pendingCountValue === 0 ? '没有待推送操作。此处只表示队列为空，不代表两端库存相同。'
+    : !draft.valid ? '请先配置服务器地址，再推送本机变更。'
+    : draft.dirty ? '请先应用连接设置，再向确认的服务器推送。'
+    : busy ? '正在处理，请等待完成。' : `有 ${pendingCountValue} 条待推送操作；按顺序提交，已记账操作不会重复执行。`;
+  $('btn-sync-pull').disabled = !ready || DataLayer.mode !== 'local' || pendingCountValue !== 0;
+  $('pull-mode-hint').textContent = DataLayer.mode !== 'local' ? '当前直接读写服务器，无需拉取。要准备离线库存，请先切换本机离线库。'
+    : pendingCountValue === null ? '暂未取得待推送数量，无法确认能否安全覆盖本机库。请稍后重试。'
+    : pendingCountValue > 0 ? '本机还有待推送操作，暂不能用服务器快照覆盖。请先备份并处理队列。'
+    : !draft.valid ? '请先配置服务器地址，再准备离线库存。'
+    : draft.dirty ? '请先应用连接设置，再从确认的服务器拉取。'
+    : busy ? '正在处理，请等待完成。'
+    : '用服务器快照替换本机库；拉取前需要确认，不会自动执行。';
+}
+
+async function runDataCenterAction(action) {
+  if (dataCenterBusy) return;
+  dataCenterBusy = true;
+  renderDataCenterActions();
+  try { await action(); }
+  catch (error) { setSyncStatus(error.message, false); }
+  finally {
+    dataCenterBusy = false;
+    await updatePendingCount();
   }
 }
 
@@ -2955,6 +3021,7 @@ function requireSavedServerSettings() {
 }
 async function saveServerSettings() {
   try {
+    if (!connectionDraftState().dirty) return;
     const url = resolveSyncBase($('input-server-url').value);
     const token = $('input-api-token').value.trim();
     if (!await confirmDataSwitch('应用连接设置', DataLayer.mode)) return;
@@ -2985,8 +3052,12 @@ function renderDataSource() {
   $('current-data-badge').classList.toggle('local-mode', local);
   $('current-data-badge').classList.toggle('server-mode', !local);
   $('current-data-source').textContent = local ? '本机 IndexedDB · 与服务器是两份独立的数据' : `SQLite · ${url}`;
-  $('btn-sync-pull').disabled = !local;
-  $('pull-mode-hint').textContent = local ? '用服务器快照替换本机库；有待推送操作时禁止覆盖。' : '当前直接读写服务器，无需拉取。要准备离线库存，请先切换本机离线库。';
+  $$('#data-mode-seg button').forEach(button => {
+    const current = button.dataset.mode === DataLayer.mode;
+    button.classList.toggle('active', current);
+    button.setAttribute('aria-pressed', String(current));
+  });
+  renderDataCenterActions();
 }
 window.addEventListener('pinbox-local-change', () => updatePendingCount());
 
@@ -2999,9 +3070,13 @@ function setSyncStatus(msg, ok) {
 }
 
 async function updatePendingCount() {
-  const n = await syncPendingCount();
-  const el = $('pending-count');
-  if (el) el.innerText = n;
+  const request = ++pendingCountRequest;
+  let count = null;
+  try { count = await syncPendingCount(); } catch (_) { /* Keep sync disabled if the local queue cannot be read. */ }
+  if (request !== pendingCountRequest) return;
+  pendingCountValue = count;
+  $('pending-count').innerText = count === null ? '—' : count;
+  renderDataCenterActions();
 }
 
 function bindLocalExports() {

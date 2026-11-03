@@ -1,4 +1,4 @@
-const APP_VERSION = '1.0.25';
+const APP_VERSION = '1.0.26';
 
 function isStandaloneApp() {
   return !!window.Capacitor?.isNativePlatform?.() || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
