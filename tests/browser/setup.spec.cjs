@@ -58,7 +58,7 @@ test('legacy browser stash without a mode never silently hides a desktop SQLite 
 
 test('shared first use stays private until connection is verified and never places the key in a URL', async ({ page }) => {
   const requested = [];
-  await page.route('**/api/instance', route => route.fulfill({ json: { mode: 'shared', auth_required: true, version: '1.0.25' } }));
+  await page.route('**/api/instance', route => route.fulfill({ json: { mode: 'shared', auth_required: true, version: '1.0.26' } }));
   await page.route('**/api/stats', route => {
     requested.push(route.request().url());
     return route.fulfill(route.request().headers().authorization === 'Bearer test-shared-key'
